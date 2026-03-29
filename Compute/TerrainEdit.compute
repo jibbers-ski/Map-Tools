@@ -1,0 +1,158 @@
+#pragma kernel Curve
+#pragma kernel Mirror
+#pragma kernel Circle
+#pragma kernel MeshStamp
+
+RWTexture2D<float> Heightmap;
+Texture2D<float>   Src;
+
+int2 start;
+int2 end;
+int  res;
+
+float topOverride    = -1;
+float bottomOverride = -1;
+int   mode           = 1;
+
+StructuredBuffer<float> BakedCurve;
+int bakedCurveRes;
+
+StructuredBuffer<float> BakedCrossSection;
+int bakedCrossSectionRes;
+
+float curveWidth;
+float crossSectionDepth;
+
+// ── Circle params ────────────────────────────────────────────────────────────
+int2  circleCenter;
+float circleRadius;
+float circleHeightOverride; // normalised 0..1, or < 0 = use centre pixel height
+float circleDepth;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+float SampleBakedCurve(float t)
+{
+    float fi    = t * (bakedCurveRes - 1);
+    int   lo    = (int)floor(fi);
+    int   hi    = (int)ceil(fi);
+    return lerp(BakedCurve[lo], BakedCurve[hi], frac(fi));
+}
+
+float SampleBakedCrossSection(float t)
+{
+    float fi = t * (bakedCrossSectionRes - 1);
+    int   lo = (int)floor(fi);
+    int   hi = (int)ceil(fi);
+    return lerp(BakedCrossSection[lo], BakedCrossSection[hi], frac(fi));
+}
+
+// ── Curve kernel ─────────────────────────────────────────────────────────────
+[numthreads(8, 8, 1)]
+void Curve(uint3 id : SV_DispatchThreadID)
+{
+    int x = id.x;
+    int y = id.y;
+    if (x >= res || y >= res) return;
+
+    float2 a = float2(start.x, start.y);
+    float2 b = float2(end.x,   end.y);
+    float2 d = b - a;
+    float  segLen = length(d);
+
+    float2 p   = float2(x, y);
+    float2 dp  = p - a;
+    float2 fwd = normalize(d);
+
+    float ly = dot(dp, fwd);
+    if (ly < 0 || ly > segLen) return;
+
+    float2 right = normalize(float2(fwd.y, -fwd.x));
+    float  lx    = dot(dp, right) + curveWidth * 0.5;
+    if (lx < 0 || lx > curveWidth) return;
+
+    float startH = topOverride    < 0 ? Heightmap[start] : topOverride;
+    float endH   = bottomOverride < 0 ? Heightmap[end]   : bottomOverride;
+
+    float t = saturate(ly / segLen);
+    float h = lerp(startH, endH, 1.0 - SampleBakedCurve(t));
+
+    float crossT = saturate(lx / curveWidth);
+    h += SampleBakedCrossSection(crossT) * crossSectionDepth;
+
+    Heightmap[int2(x, y)] = h;
+}
+
+// ── Mirror kernel ─────────────────────────────────────────────────────────────
+[numthreads(8, 8, 1)]
+void Mirror(uint3 id : SV_DispatchThreadID)
+{
+    int x = id.x;
+    int y = id.y;
+    if (x >= res || y >= res) return;
+
+    int mx = x;
+    int my = y;
+    if (mode == 0 || mode == 2) mx = res - 1 - x;
+    if (mode == 1 || mode == 2) my = res - 1 - y;
+
+    Heightmap[int2(x, y)] = Src[int2(mx, my)];
+}
+
+// ── Circle kernel ─────────────────────────────────────────────────────────────
+// radialCurve: t=0 is centre, t=1 is edge.  h = baseH + curve(t) * circleDepth
+[numthreads(8, 8, 1)]
+void Circle(uint3 id : SV_DispatchThreadID)
+{
+    int x = id.x;
+    int y = id.y;
+    if (x >= res || y >= res) return;
+
+    float2 p    = float2(x, y);
+    float  dist = length(p - float2(circleCenter.x, circleCenter.y));
+    if (dist > circleRadius) return;
+
+    float baseH = circleHeightOverride < 0 ? Heightmap[circleCenter] : circleHeightOverride;
+
+    float t = saturate(dist / circleRadius);
+    float h = baseH + SampleBakedCurve(t) * circleDepth;
+
+    Heightmap[int2(x, y)] = h;
+}
+
+// ── Mesh stamp params ────────────────────────────────────────────────────────
+Texture2D<float> MeshDepthTex;
+int   meshDepthRes;   // resolution of the depth bake texture
+int2  stampMin;       // top-left corner on heightmap
+int2  stampSize;      // size in heightmap pixels
+float stampFalloff;   // 0..1 fraction of bounds for edge blend
+
+// ── MeshStamp kernel ─────────────────────────────────────────────────────────
+// MeshDepthTex stores normalised terrain height at each texel (0 = no hit).
+// Where the mesh was hit, terrain is set to that height, blended at edges.
+[numthreads(8, 8, 1)]
+void MeshStamp(uint3 id : SV_DispatchThreadID)
+{
+    int x = id.x;
+    int y = id.y;
+    if (x >= res || y >= res) return;
+
+    int2 local = int2(x - stampMin.x, y - stampMin.y);
+    if (local.x < 0 || local.x >= stampSize.x ||
+        local.y < 0 || local.y >= stampSize.y) return;
+
+    float2 uv = (float2(local) + 0.5) / float2(stampSize);
+    int2 texCoord = int2(uv * float2(meshDepthRes, meshDepthRes));
+    texCoord = clamp(texCoord, int2(0,0), int2(meshDepthRes - 1, meshDepthRes - 1));
+    float target = MeshDepthTex.Load(int3(texCoord, 0));
+
+    if (target <= 0) return; // no mesh coverage
+
+    // Edge blend
+    float edgeX = min(uv.x, 1.0 - uv.x);
+    float edgeY = min(uv.y, 1.0 - uv.y);
+    float edge  = min(edgeX, edgeY);
+    float blend = stampFalloff > 0 ? saturate(edge / stampFalloff) : 1.0;
+
+    float current = Heightmap[int2(x, y)];
+    Heightmap[int2(x, y)] = lerp(current, target, blend);
+}

@@ -1,0 +1,13 @@
+{
+    "name": "fun.jibbers.map-tools",
+    "version": "0.2.0",
+    "displayName": "Jibbers Map Tools",
+    "description": "Map tooling for Jibbers.",
+    "unity": "6000.0",
+    "author": {
+        "name": "Leander Edler-Golla"
+    },
+    "dependencies": {
+        "com.unity.nuget.newtonsoft-json": "3.2.1"
+    }
+}

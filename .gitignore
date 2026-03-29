@@ -1,0 +1,35 @@
+# Unity
+*.unity
+*.unityproj
+*.DS_Store
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Unity generated
+Temp/
+Obj/
+Build/
+Builds/
+Library/
+Logs/
+UserSettings/
+MemoryCaptures/
+
+# Rider/VS/VSCode
+.idea/
+.vs/
+.vscode/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+
+# OS
+.DS_Store
+Thumbs.db
