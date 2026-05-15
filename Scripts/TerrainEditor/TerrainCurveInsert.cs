@@ -43,19 +43,20 @@ namespace Jibbers.MapTools
                 new GUIContent("crossSectionDepth"));
             EditorGUI.PropertyField(Row(), property.FindPropertyRelative("crossSectionBakeRes"),
                 new GUIContent("crossSectionBakeRes"));
+            EditorGUI.Slider(Row(), property.FindPropertyRelative("crossSectionSideFlatten"),
+                0f, 0.5f, "crossSectionSideFlatten");
 
-            // repeats + repeatScaling on one row
-            {
-                var row   = Row(10);
-                float half = (row.width - 2) / 2f;
-                float savedLW = EditorGUIUtility.labelWidth;
-                EditorGUIUtility.labelWidth = 70f;
-                EditorGUI.PropertyField(new Rect(row.x,           row.y, half - 1, row.height),
-                    property.FindPropertyRelative("repeats"),       new GUIContent("repeats"));
-                EditorGUI.PropertyField(new Rect(row.x + half + 1, row.y, half,   row.height),
-                    property.FindPropertyRelative("repeatScaling"), new GUIContent("repeatScaling"));
-                EditorGUIUtility.labelWidth = savedLW;
-            }
+            EditorGUI.Slider(Row(10), property.FindPropertyRelative("edgeBlend"),
+                0f, 0.5f, "edgeBlend");
+            EditorGUI.Slider(Row(), property.FindPropertyRelative("edgeFalloff"),
+                0.25f, 4f, "edgeFalloff");
+
+            EditorGUI.PropertyField(Row(10), property.FindPropertyRelative("repeats"),
+                new GUIContent("repeats"));
+            EditorGUI.PropertyField(Row(), property.FindPropertyRelative("repeatScaling"),
+                new GUIContent("repeatScaling"));
+            EditorGUI.Slider(Row(), property.FindPropertyRelative("repeatTransitionFade"),
+                0f, 0.5f, "repeatTransitionFade");
 
             DrawApplyButton(
                 editor != null && editor.terrain != null
@@ -70,7 +71,7 @@ namespace Jibbers.MapTools
         {
             float line = EditorGUIUtility.singleLineHeight;
             if (!property.isExpanded) return line;
-            return line + (15 * (line + Spacing)) + 70f;
+            return line + (20 * (line + Spacing)) + 80f;
         }
     }
 #endif
@@ -96,9 +97,32 @@ namespace Jibbers.MapTools
         public float          repeatScaling  = 1;
 
         [Space(20)]
-        public AnimationCurve crossSection        = AnimationCurve.Constant(0, 1, 0);
-        public float          crossSectionDepth   = 0;
-        public int            crossSectionBakeRes = 512;
+        public AnimationCurve crossSection            = AnimationCurve.Constant(0, 1, 0);
+        public float          crossSectionDepth       = 0;
+        public int            crossSectionBakeRes     = 512;
+        [Range(0, 0.5f)]
+        public float          crossSectionSideFlatten = 0;
+
+        [Range(0, 0.5f)]
+        public float          repeatTransitionFade    = 0;
+
+        [Range(0, 0.5f)]
+        public float          edgeBlend               = 0;
+
+        [Range(0.25f, 4f)]
+        public float          edgeFalloff             = 1;
+
+        [NonSerialized] public PreviewCache cache;
+
+        public class PreviewCache
+        {
+            public int hash;
+            public Vector3 labelPos;
+            public Vector3[] mainLine;
+            public Vector3[] leftEdge;
+            public Vector3[] rightEdge;
+            public Vector3[][] crossSections;
+        }
     }
 
 }

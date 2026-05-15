@@ -31,8 +31,10 @@ namespace Jibbers.MapTools
         public Vector3 size;
 
         public MapObjectData[] objects;
+        public CustomMapObjectData[] customObjects;
 
         public TextureData snowMaskData;
+        public bool snowMask4Channel;
 
         public int repeats;
         public Vector3 repeatOffset;
@@ -53,6 +55,9 @@ namespace Jibbers.MapTools
 
             snowMaskData = chunk.snowMask ? new TextureData(chunk.snowMask) : null;
 
+            var mat = chunk.terrain.materialTemplate;
+            snowMask4Channel = mat != null && mat.HasProperty("_SnowMask4Channel") && mat.GetFloat("_SnowMask4Channel") > 0.5f;
+
             repeats = chunk.repeats;
             repeatOffset = chunk.repeatOffset;
         }
@@ -65,8 +70,11 @@ namespace Jibbers.MapTools
             terrainData = serializer.SerializeBytes("terrain-data", terrainData);
 
             SerializeTexture(serializer, "snow-mask", ref snowMaskData);
+            snowMask4Channel = serializer.SerializeBool("snow-mask-4channel", snowMask4Channel);
 
             serializer.SerializeSerializableArray("objects", ref objects, () => new MapObjectData());
+
+            serializer.SerializeSerializableArray("custom-objects", ref customObjects, () => new CustomMapObjectData());
 
             repeats = serializer.SerializeInt("repeats", repeats);
             repeatOffset = serializer.SerializeVector3("repeat-offset", repeatOffset);

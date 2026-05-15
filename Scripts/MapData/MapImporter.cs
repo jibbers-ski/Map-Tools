@@ -32,6 +32,7 @@ namespace Jibbers.MapTools
 
         [SerializeField] string mapFileName;
         [SerializeField] Material material;
+        [SerializeField] Material customObjectMaterial;
 
         public void Import()
         {
@@ -68,6 +69,18 @@ namespace Jibbers.MapTools
             foreach(var prefab in objPrefabs)
                 objPrefabDict[prefab.name.Replace("_placeholder","")] = prefab;
 
+            var meshes = new Dictionary<string, Mesh>();
+            if (map.meshLibrary != null)
+                foreach (var kv in map.meshLibrary)
+                    meshes[kv.Key] = kv.Value.GetMesh();
+
+            var textures = new Dictionary<string, Texture2D>();
+            if (map.textureLibrary != null)
+                foreach (var kv in map.textureLibrary)
+                    textures[kv.Key] = kv.Value.GetTexture();
+
+            var matCache = new Dictionary<string, Material>();
+
             foreach(var chunk in map.chunks)
             {
                 var terrainData = new TerrainData() {
@@ -90,7 +103,12 @@ namespace Jibbers.MapTools
                 {
                     var snowMask = chunk.snowMaskData.GetTexture();
                     terrain.materialTemplate.SetTexture("_SnowMask", snowMask);
+                    if (terrain.materialTemplate.HasProperty("_UseMasks"))
+                        terrain.materialTemplate.SetFloat("_UseMasks", 1f);
                 }
+
+                if (chunk.snowMask4Channel && terrain.materialTemplate.HasProperty("_SnowMask4Channel"))
+                    terrain.materialTemplate.SetFloat("_SnowMask4Channel", 1f);
 
                 terrain.Flush();
 
@@ -99,11 +117,80 @@ namespace Jibbers.MapTools
                 foreach(var mapObject in chunk.objects)
                 {
                     var prefab = objPrefabDict[mapObject.id];
-                    var newObj = Instantiate(prefab, mapObjects);
-
+                    #if UNITY_EDITOR
+                        var newObj = (Transform)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, mapObjects);
+                    #else
+                        var newObj = Instantiate(prefab, mapObjects);
+                    #endif
                     newObj.transform.localScale = mapObject.scale;
                     newObj.transform.position = mapObject.position;
                     newObj.transform.rotation = Quaternion.Euler(mapObject.rotation);
+
+                    if (mapObject.parameters != null && mapObject.parameters.Count > 0)
+                    {
+                        var mapObjComp = newObj.GetComponent<MapObject>();
+                        if (mapObjComp != null && mapObjComp.parameters != null)
+                        {
+                            foreach (var existing in mapObjComp.parameters)
+                            {
+                                if (mapObject.parameters.TryGetValue(existing.name, out var imported))
+                                {
+                                    existing.type        = imported.type;
+                                    existing.intValue    = imported.intValue;
+                                    existing.floatValue  = imported.floatValue;
+                                    existing.boolValue   = imported.boolValue;
+                                    existing.stringValue = imported.stringValue;
+                                }
+                            }
+                            #if UNITY_EDITOR
+                            UnityEditor.EditorUtility.SetDirty(mapObjComp);
+                            #endif
+                        }
+                    }
+                }
+
+                if (chunk.customObjects != null && chunk.customObjects.Length > 0)
+                {
+                    var customRoot = new GameObject("CustomObjects").transform;
+                    customRoot.parent = terrainGO.transform;
+
+                    foreach (var obj in chunk.customObjects)
+                    {
+                        if (obj.parts == null || obj.parts.Length == 0) continue;
+
+                        var rootGO = new GameObject("CustomObject");
+                        rootGO.transform.parent = customRoot;
+                        rootGO.transform.position = obj.position;
+                        rootGO.transform.rotation = Quaternion.Euler(obj.rotation);
+
+                        foreach (var part in obj.parts)
+                        {
+                            if (string.IsNullOrEmpty(part.meshRef) || !meshes.ContainsKey(part.meshRef)) continue;
+
+                            var partGO = new GameObject(part.meshRef);
+                            partGO.transform.parent = rootGO.transform;
+                            partGO.transform.position = part.localPosition;
+                            partGO.transform.rotation = Quaternion.Euler(part.localRotation);
+                            partGO.transform.localScale = part.localScale;
+
+                            partGO.AddComponent<MeshFilter>().sharedMesh = meshes[part.meshRef];
+
+                            string matKey = $"{part.baseTexRef}|{part.metallicTexRef}|{part.roughnessTexRef}|{part.normalTexRef}";
+                            if (!matCache.TryGetValue(matKey, out Material mat))
+                            {
+                                mat = customObjectMaterial != null
+                                    ? new Material(customObjectMaterial)
+                                    : new Material(Shader.Find("Custom/CustomObjectLit"));
+                                SetTex(mat, "_BaseMap",        part.baseTexRef,      textures);
+                                SetTex(mat, "_MetallicMap",    part.metallicTexRef,  textures);
+                                SetTex(mat, "_RoughnessMap",   part.roughnessTexRef, textures);
+                                SetTex(mat, "_NormalMap",      part.normalTexRef,    textures);
+                                matCache[matKey] = mat;
+                            }
+
+                            partGO.AddComponent<MeshRenderer>().sharedMaterial = mat;
+                        }
+                    }
                 }
             }
 
@@ -117,6 +204,12 @@ namespace Jibbers.MapTools
                 newSpawnPoint.transform.rotation = Quaternion.Euler(spawnPoint.rotation);
                 newSpawnPoint.velocity = spawnPoint.velocity;
             }
+        }
+
+        static void SetTex(Material mat, string prop, string texRef, Dictionary<string, Texture2D> lib)
+        {
+            if (!string.IsNullOrEmpty(texRef) && lib.TryGetValue(texRef, out var tex))
+                mat.SetTexture(prop, tex);
         }
     }
 

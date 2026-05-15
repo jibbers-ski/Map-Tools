@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace Jibbers.MapTools
@@ -20,12 +18,18 @@ namespace Jibbers.MapTools
         {
             width = texture.width;
             height = texture.height;
+            format = TextureFormat.RGBA32;
+
+            if (!texture.isReadable)
+            {
+                Debug.LogError($"[TextureData] Texture '{texture.name}' is not readable. Enable Read/Write in import settings.");
+                data = new byte[width * height * 4];
+                return;
+            }
 
             var readable = new Texture2D(width, height, TextureFormat.RGBA32, false, true);
             readable.SetPixels(texture.GetPixels());
             readable.Apply();
-
-            format = TextureFormat.RGBA32;
             data = readable.GetRawTextureData();
         }
 

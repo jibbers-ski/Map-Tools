@@ -19,6 +19,9 @@ namespace Jibbers.MapTools
         public Vector3 camStartPosition;
         public bool allowBackgroundMountains;
 
+        public Dictionary<string, MeshData> meshLibrary;
+        public Dictionary<string, TextureData> textureLibrary;
+
         public bool headerOnly;
 
         public void Serialize(ISerializer serializer)
@@ -34,6 +37,11 @@ namespace Jibbers.MapTools
             {
                 serializer.SerializeSerializableArray("chunks", ref chunks, () => new MapTerrainChunkData());
                 serializer.SerializeSerializableArray("spawnpoints", ref spawnPoints, () => new SpawnPointData());
+
+                meshLibrary ??= new Dictionary<string, MeshData>();
+                textureLibrary ??= new Dictionary<string, TextureData>();
+                serializer.SerializeSerializableDict("mesh-library", ref meshLibrary, k => new MeshData(), true);
+                serializer.SerializeSerializableDict("texture-library", ref textureLibrary, k => new TextureData(), true);
             }
         }
 

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
 using UnityEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -9,6 +11,9 @@ public class JsonSerializer : ISerializer
 {
 
     public static bool EnableLog;
+    const bool LogWarnings = false;
+
+    public bool EnableCompression;
 
     public bool IsReader => !isWriting;
     public object Data => mainObject.ToString(Formatting.Indented);
@@ -61,7 +66,10 @@ public class JsonSerializer : ISerializer
             if (TryGet(id, out JObject obj))
                 blockStack.Push(obj);
             else
-                Debug.LogWarning($"[JsonSerializer] Couldn't find Block with id '{id}'");
+            {
+                //Debug.LogWarning($"[Reading JsonSerializer] Couldn't find Block with id '{id}', inserting new..");
+                blockStack.Push(new JObject());
+            }
         }
     }
 
@@ -143,8 +151,21 @@ public class JsonSerializer : ISerializer
                 return null;
             }
 
-            string base64 = Convert.ToBase64String(data);
-            AddValue(id, base64);
+            if (EnableCompression)
+            {
+                byte[] compressed;
+                using (var ms = new MemoryStream())
+                {
+                    using (var gz = new GZipStream(ms, System.IO.Compression.CompressionLevel.Optimal))
+                        gz.Write(data, 0, data.Length);
+                    compressed = ms.ToArray();
+                }
+                AddValue(id, Convert.ToBase64String(compressed));
+            }
+            else
+            {
+                AddValue(id, Convert.ToBase64String(data));
+            }
             return data;
         }
         else
@@ -156,7 +177,17 @@ public class JsonSerializer : ISerializer
 
                 try
                 {
-                    return Convert.FromBase64String(base64);
+                    byte[] bytes = Convert.FromBase64String(base64);
+                    // detect gzip magic header
+                    if (bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B)
+                    {
+                        using var input = new MemoryStream(bytes);
+                        using var gz = new GZipStream(input, CompressionMode.Decompress);
+                        using var output = new MemoryStream();
+                        gz.CopyTo(output);
+                        return output.ToArray();
+                    }
+                    return bytes;
                 }
                 catch (Exception e)
                 {
@@ -233,7 +264,9 @@ public class JsonSerializer : ISerializer
 
         if(EnableLog) Debug.Log("Setting " + CurrentObject.Path + " > " + id + " to " + value);
 
-        if (value is JToken token)
+        if (value == null)
+            CurrentObject[id] = JValue.CreateNull();
+        else if (value is JToken token)
             CurrentObject[id] = token;
         else
             CurrentObject[id] = JToken.FromObject(value);
@@ -271,14 +304,14 @@ public class JsonSerializer : ISerializer
             }
             catch (Exception e)
             {
-                if(!ignoreWarnings)
+                if(LogWarnings && !ignoreWarnings)
                     Debug.LogWarning($"[JsonSerializer] Object with id '{id}' could not be converted to '{typeof(T)}': {e.Message}");
                 if(EnableLog) Debug.Log(" => Conversion Fail");
                 return false;
             }
         }
 
-        if(!ignoreWarnings)
+        if(LogWarnings && !ignoreWarnings)
             Debug.LogWarning($"[JsonSerializer] Couldn't load object of Type '{typeof(T)}' with id '{id}'");
         if(EnableLog) Debug.Log(" => Not Found Fail");
         return false;

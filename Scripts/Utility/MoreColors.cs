@@ -30,5 +30,7 @@ public static class MoreColors
     public static readonly Color Steel         = new Color(0.45f, 0.5f, 0.55f);
     public static readonly Color Sand          = new Color(0.82f, 0.75f, 0.55f);
 
+    public static readonly Color JibbersOrange = new Color(1f, 0.64f, 0.22f);
+
     public static Color[] List = new Color[] {Orange,Crimson,Azure,Brown,Rose,Amber,Burgundy,SkyBlue,Gold,Forest,Navy,Mint,Lime,RoyalBlue,Teal,Violet,Lavender,Indigo,Charcoal,Slate,Steel,Sand };
 }

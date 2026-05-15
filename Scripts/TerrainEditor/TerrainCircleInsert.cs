@@ -23,7 +23,6 @@ namespace Jibbers.MapTools
             DrawHeightOverride(property.FindPropertyRelative("heightOverride"),
                 "heightOverride", centerXProp, centerYProp);
 
-            // radius + depth on one row
             {
                 var row   = Row();
                 float half = (row.width - 2) / 2f;

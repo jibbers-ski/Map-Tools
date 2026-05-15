@@ -52,7 +52,6 @@ namespace Jibbers.MapTools
             return r;
         }
 
-        // Returns false if collapsed — caller should return early
         protected bool BeginInsertGUI(Rect pos, SerializedProperty property, GUIContent label)
         {
             position = pos;
@@ -70,8 +69,8 @@ namespace Jibbers.MapTools
             if (!property.isExpanded) { EditorGUI.EndProperty(); return false; }
 
             editor = property.serializedObject.targetObject as BetterTerrainEditor;
-            maxX   = editor != null && editor.resX > 0 ? editor.resX : 2048;
-            maxY   = editor != null && editor.resY > 0 ? editor.resY : 2048;
+            maxX   = editor != null && editor.resX > 0 ? editor.resX-1 : 2048;
+            maxY   = editor != null && editor.resY > 0 ? editor.resY-1 : 2048;
 
             y = position.y + line + Spacing;
             return true;
@@ -81,21 +80,18 @@ namespace Jibbers.MapTools
         {
             var row    = Row();
             const float checkW = 70f;
-            float nameW  = row.width - checkW * 2 - 4;
+            float nameW  = row.width - checkW - 2;
             float savedLW = EditorGUIUtility.labelWidth;
             EditorGUI.PropertyField(new Rect(row.x, row.y, nameW, row.height),
                 property.FindPropertyRelative("name"), GUIContent.none);
             EditorGUIUtility.labelWidth = 52f;
-            EditorGUI.PropertyField(new Rect(row.x + nameW + 2,          row.y, checkW, row.height),
-                property.FindPropertyRelative("enabled"),     new GUIContent("enabled"));
-            EditorGUI.PropertyField(new Rect(row.x + nameW + 2 + checkW, row.y, checkW, row.height),
+            EditorGUI.PropertyField(new Rect(row.x + nameW + 2, row.y, checkW, row.height),
                 property.FindPropertyRelative("drawPreview"), new GUIContent("preview"));
             EditorGUIUtility.labelWidth = savedLW;
         }
 
         protected void DrawCoordinatePicker(string headerLabel, SerializedProperty xProp, SerializedProperty yProp)
         {
-            // Header with height display and Pick button
             {
                 var row = Row(10);
                 const float pickW = 50f;
@@ -114,10 +110,11 @@ namespace Jibbers.MapTools
                     BetterTerrainEditorEditor.pickTargetYProp = yProp;
                     BetterTerrainEditorEditor.pickEditor      = editor;
                     BetterTerrainEditorEditor.pickLabel       = insertName + " " + headerLabel;
+                    if (SceneView.lastActiveSceneView != null)
+                        SceneView.lastActiveSceneView.Focus();
                 }
                 GUI.color = Color.white;
             }
-            // XY sliders
             {
                 var row   = Row();
                 float half = (row.width - 2) / 2f;
@@ -208,7 +205,6 @@ namespace Jibbers.MapTools
     {
         public string name;
 
-        public bool enabled     = true;
         public bool drawPreview = true;
 
         public int bakeResolution = 512;

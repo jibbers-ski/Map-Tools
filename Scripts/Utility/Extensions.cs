@@ -122,7 +122,7 @@ namespace Jibbers.MapTools
             start = 1 - start;
             end = 1 - end;
 
-            return Mathf.Lerp(end,start,curve.Evaluate(sectionT));
+            return Mathf.Lerp(end, start, curve.Evaluate(sectionT));
         }
 
     }

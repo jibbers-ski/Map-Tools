@@ -22,6 +22,9 @@ int bakedCrossSectionRes;
 
 float curveWidth;
 float crossSectionDepth;
+float crossSectionSideFlatten;
+float edgeBlend;
+float edgeFalloff;
 
 // ── Circle params ────────────────────────────────────────────────────────────
 int2  circleCenter;
@@ -74,12 +77,35 @@ void Curve(uint3 id : SV_DispatchThreadID)
     float endH   = bottomOverride < 0 ? Heightmap[end]   : bottomOverride;
 
     float t = saturate(ly / segLen);
-    float h = lerp(startH, endH, 1.0 - SampleBakedCurve(t));
+    float flatH  = lerp(startH, endH, t);
+    float curveH = lerp(startH, endH, 1.0 - SampleBakedCurve(t));
 
     float crossT = saturate(lx / curveWidth);
-    h += SampleBakedCrossSection(crossT) * crossSectionDepth;
+    float crossVal = SampleBakedCrossSection(crossT) * crossSectionDepth;
 
-    Heightmap[int2(x, y)] = h;
+    float edgeDist = min(crossT, 1.0 - crossT);
+    float sideFade = crossSectionSideFlatten > 0 ? saturate(edgeDist / crossSectionSideFlatten) : 1.0;
+    sideFade = sideFade * sideFade * (3.0 - 2.0 * sideFade);
+
+    float curveResult = lerp(flatH, curveH + crossVal, sideFade);
+
+    float edgeT = min(t, 1.0 - t);
+    float edgeC = min(crossT, 1.0 - crossT);
+    float edge  = min(edgeT, edgeC);
+    float blend;
+    if (edgeBlend > 0)
+    {
+        float u = saturate(edge / edgeBlend);
+        u = u * u * (3.0 - 2.0 * u);
+        blend = pow(u, edgeFalloff);
+    }
+    else
+    {
+        blend = 1.0;
+    }
+
+    float original = Heightmap[int2(x, y)];
+    Heightmap[int2(x, y)] = lerp(original, curveResult, blend);
 }
 
 // ── Mirror kernel ─────────────────────────────────────────────────────────────
@@ -120,8 +146,8 @@ void Circle(uint3 id : SV_DispatchThreadID)
 }
 
 // ── Mesh stamp params ────────────────────────────────────────────────────────
-Texture2D<float> MeshDepthTex;
-int   meshDepthRes;   // resolution of the depth bake texture
+Texture2D<float>  MeshDepthTex;
+SamplerState      sampler_linear_clamp;   // bilinear filtering, clamp edges
 int2  stampMin;       // top-left corner on heightmap
 int2  stampSize;      // size in heightmap pixels
 float stampFalloff;   // 0..1 fraction of bounds for edge blend
@@ -141,13 +167,10 @@ void MeshStamp(uint3 id : SV_DispatchThreadID)
         local.y < 0 || local.y >= stampSize.y) return;
 
     float2 uv = (float2(local) + 0.5) / float2(stampSize);
-    int2 texCoord = int2(uv * float2(meshDepthRes, meshDepthRes));
-    texCoord = clamp(texCoord, int2(0,0), int2(meshDepthRes - 1, meshDepthRes - 1));
-    float target = MeshDepthTex.Load(int3(texCoord, 0));
+    float target = MeshDepthTex.SampleLevel(sampler_linear_clamp, uv, 0);
 
     if (target <= 0) return; // no mesh coverage
 
-    // Edge blend
     float edgeX = min(uv.x, 1.0 - uv.x);
     float edgeY = min(uv.y, 1.0 - uv.y);
     float edge  = min(edgeX, edgeY);
