@@ -151,16 +151,18 @@ namespace Jibbers.MapTools
                     foreach (var mf in obj.GetComponentsInChildren<MeshFilter>())
                     {
                         var mr = mf.GetComponent<MeshRenderer>();
-                        Log($"    MeshFilter on '{mf.gameObject.name}': mesh={mf.sharedMesh?.name ?? "null"}, mat={mr?.sharedMaterial?.name ?? "null"}");
-                        var part = ExtractPart(mf.sharedMesh, mr != null ? mr.sharedMaterial : null,
+                        var mats = mr != null ? mr.sharedMaterials : null;
+                        Log($"    MeshFilter on '{mf.gameObject.name}': mesh={mf.sharedMesh?.name ?? "null"}, mats={(mats != null ? mats.Length : 0)}");
+                        var part = ExtractPart(mf.sharedMesh, mats,
                             mf.transform, root, meshLibrary, textureLibrary);
                         if (part != null) partsList.Add(part);
                     }
 
                     foreach (var smr in obj.GetComponentsInChildren<SkinnedMeshRenderer>())
                     {
-                        Log($"    SkinnedMeshRenderer on '{smr.gameObject.name}': mesh={smr.sharedMesh?.name ?? "null"}, mat={smr.sharedMaterial?.name ?? "null"}");
-                        var part = ExtractPart(smr.sharedMesh, smr.sharedMaterial,
+                        var mats = smr.sharedMaterials;
+                        Log($"    SkinnedMeshRenderer on '{smr.gameObject.name}': mesh={smr.sharedMesh?.name ?? "null"}, mats={(mats != null ? mats.Length : 0)}");
+                        var part = ExtractPart(smr.sharedMesh, mats,
                             smr.transform, root, meshLibrary, textureLibrary);
                         if (part != null) partsList.Add(part);
                     }
@@ -235,7 +237,7 @@ namespace Jibbers.MapTools
             Debug.Log("Saved to: " + filePath);
         }
 
-        static CustomMapObjectPartData ExtractPart(Mesh mesh, Material mat, Transform child, Transform root,
+        static CustomMapObjectPartData ExtractPart(Mesh mesh, Material[] mats, Transform child, Transform root,
             Dictionary<string, MeshData> meshLibrary, Dictionary<string, TextureData> textureLibrary)
         {
             if (mesh == null) return null;
@@ -249,20 +251,45 @@ namespace Jibbers.MapTools
             if (!meshLibrary.ContainsKey(meshKey))
                 meshLibrary[meshKey] = new MeshData(mesh);
 
+            int matCount  = mats != null ? mats.Length : 0;
+            int slotCount = Mathf.Max(1, Mathf.Min(mesh.subMeshCount, matCount));
+            var materials = new CustomMapObjectMaterialData[slotCount];
+            for (int i = 0; i < slotCount; i++)
+            {
+                var mat = i < matCount ? mats[i] : null;
+                materials[i] = new CustomMapObjectMaterialData
+                {
+                    baseTexRef      = ExtractTexKey(mat, "_BaseMap",      textureLibrary),
+                    metallicTexRef  = ExtractTexKey(mat, "_MetallicMap",  textureLibrary),
+                    roughnessTexRef = ExtractTexKey(mat, "_RoughnessMap", textureLibrary),
+                    normalTexRef    = ExtractTexKey(mat, "_NormalMap",    textureLibrary),
+                    renderMode      = GetRenderMode(mat),
+                    alphaCutoff     = mat != null && mat.HasProperty("_Cutoff") ? mat.GetFloat("_Cutoff") : 0.5f,
+                    tiling          = mat != null && mat.HasProperty("_BaseMap")   ? mat.GetTextureScale("_BaseMap")  : Vector2.one,
+                    offset          = mat != null && mat.HasProperty("_BaseMap")   ? mat.GetTextureOffset("_BaseMap") : Vector2.zero,
+                    cullMode        = mat != null && mat.HasProperty("_Cull")      ? (int) mat.GetFloat("_Cull")      : 2,
+                    baseColor       = mat != null && mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor")       : Color.white,
+                };
+            }
+
             var part = new CustomMapObjectPartData
             {
-                meshRef         = meshKey,
-                baseTexRef      = ExtractTexKey(mat, "_BaseMap",      textureLibrary),
-                metallicTexRef  = ExtractTexKey(mat, "_MetallicMap",  textureLibrary),
-                roughnessTexRef = ExtractTexKey(mat, "_RoughnessMap", textureLibrary),
-                normalTexRef    = ExtractTexKey(mat, "_NormalMap",    textureLibrary),
+                meshRef       = meshKey,
+                localPosition = child.position,
+                localRotation = child.rotation.eulerAngles,
+                localScale    = child.lossyScale,
+                materials     = materials,
             };
 
-            part.localPosition = child.position;
-            part.localRotation = child.rotation.eulerAngles;
-            part.localScale    = child.lossyScale;
-
             return part;
+        }
+
+        static CustomObjectRenderMode GetRenderMode(Material mat)
+        {
+            if (mat == null) return CustomObjectRenderMode.Opaque;
+            if (mat.renderQueue >= (int) UnityEngine.Rendering.RenderQueue.Transparent) return CustomObjectRenderMode.Transparent;
+            if (mat.IsKeywordEnabled("_ALPHATEST_ON")) return CustomObjectRenderMode.AlphaClip;
+            return CustomObjectRenderMode.Opaque;
         }
 
         static string ExtractTexKey(Material mat, string prop, Dictionary<string, TextureData> library)

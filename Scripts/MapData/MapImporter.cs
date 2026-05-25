@@ -175,20 +175,35 @@ namespace Jibbers.MapTools
 
                             partGO.AddComponent<MeshFilter>().sharedMesh = meshes[part.meshRef];
 
-                            string matKey = $"{part.baseTexRef}|{part.metallicTexRef}|{part.roughnessTexRef}|{part.normalTexRef}";
-                            if (!matCache.TryGetValue(matKey, out Material mat))
+                            int matCount = part.materials != null ? part.materials.Length : 0;
+                            var mats = new Material[matCount];
+                            for (int mi = 0; mi < matCount; mi++)
                             {
-                                mat = customObjectMaterial != null
-                                    ? new Material(customObjectMaterial)
-                                    : new Material(Shader.Find("Custom/CustomObjectLit"));
-                                SetTex(mat, "_BaseMap",        part.baseTexRef,      textures);
-                                SetTex(mat, "_MetallicMap",    part.metallicTexRef,  textures);
-                                SetTex(mat, "_RoughnessMap",   part.roughnessTexRef, textures);
-                                SetTex(mat, "_NormalMap",      part.normalTexRef,    textures);
-                                matCache[matKey] = mat;
+                                var md = part.materials[mi];
+                                string matKey = $"{md.baseTexRef}|{md.metallicTexRef}|{md.roughnessTexRef}|{md.normalTexRef}|{(int) md.renderMode}|{md.alphaCutoff}|{md.tiling}|{md.offset}|{md.cullMode}|{md.baseColor}";
+                                if (!matCache.TryGetValue(matKey, out Material mat))
+                                {
+                                    mat = customObjectMaterial != null
+                                        ? new Material(customObjectMaterial)
+                                        : new Material(Shader.Find("Custom/CustomObjectLit"));
+                                    SetTex(mat, "_BaseMap",        md.baseTexRef,      textures);
+                                    SetTex(mat, "_MetallicMap",    md.metallicTexRef,  textures);
+                                    SetTex(mat, "_RoughnessMap",   md.roughnessTexRef, textures);
+                                    SetTex(mat, "_NormalMap",      md.normalTexRef,    textures);
+                                    if (mat.HasProperty("_BaseMap"))
+                                    {
+                                        mat.SetTextureScale("_BaseMap",  md.tiling);
+                                        mat.SetTextureOffset("_BaseMap", md.offset);
+                                    }
+                                    if (mat.HasProperty("_Cull"))      mat.SetFloat("_Cull",      md.cullMode);
+                                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", md.baseColor);
+                                    ApplyRenderMode(mat, md.renderMode, md.alphaCutoff);
+                                    matCache[matKey] = mat;
+                                }
+                                mats[mi] = mat;
                             }
 
-                            partGO.AddComponent<MeshRenderer>().sharedMaterial = mat;
+                            partGO.AddComponent<MeshRenderer>().sharedMaterials = mats;
                         }
                     }
                 }
@@ -203,6 +218,35 @@ namespace Jibbers.MapTools
                 newSpawnPoint.transform.position = spawnPoint.position;
                 newSpawnPoint.transform.rotation = Quaternion.Euler(spawnPoint.rotation);
                 newSpawnPoint.velocity = spawnPoint.velocity;
+            }
+        }
+
+        static void ApplyRenderMode(Material mat, CustomObjectRenderMode mode, float alphaCutoff)
+        {
+            switch (mode)
+            {
+                case CustomObjectRenderMode.Opaque:
+                    mat.SetFloat("_SrcBlend", (float) UnityEngine.Rendering.BlendMode.One);
+                    mat.SetFloat("_DstBlend", (float) UnityEngine.Rendering.BlendMode.Zero);
+                    mat.SetFloat("_ZWrite", 1f);
+                    mat.DisableKeyword("_ALPHATEST_ON");
+                    mat.renderQueue = (int) UnityEngine.Rendering.RenderQueue.Geometry;
+                    break;
+                case CustomObjectRenderMode.AlphaClip:
+                    mat.SetFloat("_SrcBlend", (float) UnityEngine.Rendering.BlendMode.One);
+                    mat.SetFloat("_DstBlend", (float) UnityEngine.Rendering.BlendMode.Zero);
+                    mat.SetFloat("_ZWrite", 1f);
+                    mat.EnableKeyword("_ALPHATEST_ON");
+                    mat.SetFloat("_Cutoff", alphaCutoff);
+                    mat.renderQueue = (int) UnityEngine.Rendering.RenderQueue.AlphaTest;
+                    break;
+                case CustomObjectRenderMode.Transparent:
+                    mat.SetFloat("_SrcBlend", (float) UnityEngine.Rendering.BlendMode.SrcAlpha);
+                    mat.SetFloat("_DstBlend", (float) UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                    mat.SetFloat("_ZWrite", 0f);
+                    mat.DisableKeyword("_ALPHATEST_ON");
+                    mat.renderQueue = (int) UnityEngine.Rendering.RenderQueue.Transparent;
+                    break;
             }
         }
 

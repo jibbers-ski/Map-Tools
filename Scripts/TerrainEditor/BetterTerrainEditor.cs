@@ -20,6 +20,7 @@ namespace Jibbers.MapTools
         ReorderableList circleList;
         ReorderableList meshList;
         ReorderableList copyList;
+        ReorderableList paintList;
 
         public static SerializedProperty pickTargetXProp;
         public static SerializedProperty pickTargetYProp;
@@ -37,7 +38,16 @@ namespace Jibbers.MapTools
         static float _markOpacity    = 0.3f;
         static float _markHardness   = 0.1f;
         static int   _paintMarkingIdx;
+        static bool  _lockDirection;
+        static float _lockAngle;
+        static bool  _stripeBrush;
+        static float _stripeAngle;
+        static int   _stripeCount = 3;
+        static float _stripeSpacing = 20f;
         static bool  _paintPrefsLoaded;
+
+        static Vector3 lockAnchorWorld;
+        static bool    hasLockAnchor;
 
         const string PaintPrefPrefix = "BetterTerrainEditor.Paint.";
 
@@ -52,17 +62,29 @@ namespace Jibbers.MapTools
             _markOpacity     = EditorPrefs.GetFloat(PaintPrefPrefix + "MarkOpacity",  0.3f);
             _markHardness    = EditorPrefs.GetFloat(PaintPrefPrefix + "MarkHardness", 0.1f);
             _paintMarkingIdx = EditorPrefs.GetInt  (PaintPrefPrefix + "MarkingIdx",   0);
+            _lockDirection   = EditorPrefs.GetBool (PaintPrefPrefix + "LockDirection", false);
+            _lockAngle       = EditorPrefs.GetFloat(PaintPrefPrefix + "LockAngle",    0f);
+            _stripeBrush     = EditorPrefs.GetBool (PaintPrefPrefix + "StripeBrush",   false);
+            _stripeAngle     = EditorPrefs.GetFloat(PaintPrefPrefix + "StripeAngle",   0f);
+            _stripeCount     = EditorPrefs.GetInt  (PaintPrefPrefix + "StripeCount",   3);
+            _stripeSpacing   = EditorPrefs.GetFloat(PaintPrefPrefix + "StripeSpacing", 20f);
         }
 
         static void SavePaintPrefs()
         {
-            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowBrush",    _snowBrushSize);
-            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowOpacity",  _snowOpacity);
-            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowHardness", _snowHardness);
-            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkBrush",    _markBrushSize);
-            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkOpacity",  _markOpacity);
-            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkHardness", _markHardness);
-            EditorPrefs.SetInt  (PaintPrefPrefix + "MarkingIdx",   _paintMarkingIdx);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowBrush",     _snowBrushSize);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowOpacity",   _snowOpacity);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "SnowHardness",  _snowHardness);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkBrush",     _markBrushSize);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkOpacity",   _markOpacity);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "MarkHardness",  _markHardness);
+            EditorPrefs.SetInt  (PaintPrefPrefix + "MarkingIdx",    _paintMarkingIdx);
+            EditorPrefs.SetBool (PaintPrefPrefix + "LockDirection", _lockDirection);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "LockAngle",     _lockAngle);
+            EditorPrefs.SetBool (PaintPrefPrefix + "StripeBrush",   _stripeBrush);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "StripeAngle",   _stripeAngle);
+            EditorPrefs.SetInt  (PaintPrefPrefix + "StripeCount",   _stripeCount);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "StripeSpacing", _stripeSpacing);
         }
 
         static float paintBrushSize
@@ -84,6 +106,36 @@ namespace Jibbers.MapTools
         {
             get { EnsurePaintPrefsLoaded(); return _paintMarkingIdx; }
             set { _paintMarkingIdx = value; SavePaintPrefs(); }
+        }
+        static bool lockDirection
+        {
+            get { EnsurePaintPrefsLoaded(); return _lockDirection; }
+            set { _lockDirection = value; SavePaintPrefs(); }
+        }
+        static float lockAngle
+        {
+            get { EnsurePaintPrefsLoaded(); return _lockAngle; }
+            set { _lockAngle = value; SavePaintPrefs(); }
+        }
+        static bool stripeBrush
+        {
+            get { EnsurePaintPrefsLoaded(); return _stripeBrush; }
+            set { _stripeBrush = value; SavePaintPrefs(); }
+        }
+        static float stripeAngle
+        {
+            get { EnsurePaintPrefsLoaded(); return _stripeAngle; }
+            set { _stripeAngle = value; SavePaintPrefs(); }
+        }
+        static int stripeCount
+        {
+            get { EnsurePaintPrefsLoaded(); return _stripeCount; }
+            set { _stripeCount = value; SavePaintPrefs(); }
+        }
+        static float stripeSpacing
+        {
+            get { EnsurePaintPrefsLoaded(); return _stripeSpacing; }
+            set { _stripeSpacing = value; SavePaintPrefs(); }
         }
 
         static readonly string[] paintModeNames = { "Snow", "Markings" };
@@ -109,6 +161,7 @@ namespace Jibbers.MapTools
             circleList = MakeList("circleInserts", "Circle Inserts", () => new TerrainCircleInsert());
             meshList   = MakeList("meshInserts",   "Mesh Inserts",   () => new TerrainMeshInsert());
             copyList   = MakeList("copyInserts",   "Copy Inserts",   () => new TerrainCopyInsert());
+            paintList = MakeList("paintInserts", "Paint Inserts", () => new TerrainPaintInsert());
         }
 
         ReorderableList MakeList(string propName, string header, System.Func<object> createDefaults)
@@ -153,6 +206,7 @@ namespace Jibbers.MapTools
                     case SerializedPropertyType.String:         sp.stringValue         = (string)val;          break;
                     case SerializedPropertyType.Vector2:        sp.vector2Value        = (Vector2)val;         break;
                     case SerializedPropertyType.AnimationCurve: sp.animationCurveValue = (AnimationCurve)val; break;
+                    case SerializedPropertyType.Enum:           sp.enumValueIndex      = (int)val;             break;
                 }
             }
         }
@@ -242,6 +296,10 @@ namespace Jibbers.MapTools
             var col = paintEditor.terrain.GetComponent<TerrainCollider>();
             if (col != null && col.Raycast(ray, out RaycastHit hit, 50000f))
             {
+                Vector3 cursorPos = hit.point;
+                if (lockDirection && hasLockAnchor)
+                    cursorPos = ProjectOntoLockAxis(hit.point);
+
                 float worldRadius = paintBrushSize * paintEditor.terrain.terrainData.size.x
                     / paintTexture.width;
                 if (erase)
@@ -253,7 +311,25 @@ namespace Jibbers.MapTools
                 }
                 else
                     Handles.color = new Color(1f, 1f, 1f, 0.6f);
-                Handles.DrawWireDisc(hit.point, hit.normal, worldRadius);
+
+                if (stripeBrush)
+                {
+                    var stripeOffsets = GetStripeOffsetsWorld();
+                    foreach (var off in stripeOffsets)
+                        Handles.DrawWireDisc(cursorPos + off, hit.normal, worldRadius);
+                }
+                else
+                {
+                    Handles.DrawWireDisc(cursorPos, hit.normal, worldRadius);
+                }
+
+                if (lockDirection)
+                {
+                    Vector3 dir = LockDirVector();
+                    Vector3 axisAnchor = hasLockAnchor ? lockAnchorWorld : hit.point;
+                    Handles.color = new Color(1f, 1f, 0f, 0.5f);
+                    Handles.DrawLine(axisAnchor - dir * 1000f, axisAnchor + dir * 1000f, 1f);
+                }
 
                 if (evt.shift && hasLastPaint)
                 {
@@ -265,12 +341,30 @@ namespace Jibbers.MapTools
                         terrainPos.z + lastPaintV * terrainSize.z);
                     lastWorld.y = paintEditor.terrain.SampleHeight(lastWorld) + terrainPos.y;
                     Handles.color = new Color(1f, 1f, 0f, 0.8f);
-                    Handles.DrawLine(lastWorld, hit.point);
+                    Handles.DrawLine(lastWorld, cursorPos);
+
+                    Vector3 d = cursorPos - lastWorld;
+                    float ang = Mathf.Atan2(d.z, d.x) * Mathf.Rad2Deg;
+                    if (ang < 0)     ang += 180f;
+                    if (ang >= 180f) ang -= 180f;
+                    var labelStyle = new GUIStyle(EditorStyles.boldLabel);
+                    labelStyle.normal.textColor = Color.yellow;
+                    labelStyle.fontSize = 13;
+                    Handles.Label((lastWorld + cursorPos) * 0.5f + Vector3.up * 1f, $"{ang:F1}°", labelStyle);
                 }
             }
 
             if (evt.type == EventType.MouseDown && evt.button == 0)
+            {
                 Undo.RegisterCompleteObjectUndo(paintTexture, paintMode == 0 ? "Paint Snow" : "Paint Marking");
+                if (lockDirection && col != null && col.Raycast(ray, out RaycastHit anchorHit, 50000f))
+                {
+                    lockAnchorWorld = anchorHit.point;
+                    hasLockAnchor = true;
+                }
+            }
+            if (evt.type == EventType.MouseUp && evt.button == 0)
+                hasLockAnchor = false;
 
             bool shouldPaint = (evt.type == EventType.MouseDown || evt.type == EventType.MouseDrag)
                 && evt.button == 0;
@@ -279,23 +373,85 @@ namespace Jibbers.MapTools
                 ray = HandleUtility.GUIPointToWorldRay(evt.mousePosition);
                 if (col != null && col.Raycast(ray, out RaycastHit paintHit, 50000f))
                 {
-                    Vector3 local = paintHit.point - paintEditor.terrain.transform.position;
+                    Vector3 worldPos = paintHit.point;
+                    if (lockDirection && hasLockAnchor)
+                        worldPos = ProjectOntoLockAxis(worldPos);
+
                     Vector3 size  = paintEditor.terrain.terrainData.size;
-                    float u = local.x / size.x;
-                    float v = local.z / size.z;
-
+                    Vector3 terrainPos = paintEditor.terrain.transform.position;
                     bool isLine = evt.shift && hasLastPaint && evt.type == EventType.MouseDown;
-                    if (isLine)
-                        PaintLine(lastPaintU, lastPaintV, u, v, erase);
-                    else
-                        PaintAt(u, v, erase);
 
-                    lastPaintU   = u;
-                    lastPaintV   = v;
+                    Vector3[] offsets = stripeBrush ? GetStripeOffsetsWorld() : new[] { Vector3.zero };
+
+                    Vector3 lastBaseWorld = Vector3.zero;
+                    if (isLine)
+                    {
+                        lastBaseWorld = new Vector3(
+                            terrainPos.x + lastPaintU * size.x,
+                            0f,
+                            terrainPos.z + lastPaintV * size.z);
+                    }
+
+                    foreach (var off in offsets)
+                    {
+                        Vector3 stripeWorld = worldPos + off;
+                        Vector3 stripeLocal = stripeWorld - terrainPos;
+                        float u = stripeLocal.x / size.x;
+                        float v = stripeLocal.z / size.z;
+
+                        if (isLine)
+                        {
+                            Vector3 lastStripeWorld = lastBaseWorld + off;
+                            Vector3 lastStripeLocal = lastStripeWorld - terrainPos;
+                            float lu = lastStripeLocal.x / size.x;
+                            float lv = lastStripeLocal.z / size.z;
+                            PaintLine(lu, lv, u, v, erase);
+                        }
+                        else
+                        {
+                            PaintAt(u, v, erase);
+                        }
+                    }
+
+                    Vector3 baseLocal = worldPos - terrainPos;
+                    lastPaintU   = baseLocal.x / size.x;
+                    lastPaintV   = baseLocal.z / size.z;
                     hasLastPaint = true;
                 }
                 evt.Use();
             }
+        }
+
+        static Vector3[] GetStripeOffsetsWorld()
+        {
+            if (!stripeBrush || stripeCount <= 1)
+                return new[] { Vector3.zero };
+
+            float rad = stripeAngle * Mathf.Deg2Rad;
+            Vector3 perp = new Vector3(-Mathf.Sin(rad), 0, Mathf.Cos(rad));
+            float spacingWorld = stripeSpacing * paintEditor.terrain.terrainData.size.x / paintTexture.width;
+
+            var result = new Vector3[stripeCount];
+            for (int i = 0; i < stripeCount; i++)
+                result[i] = perp * i * spacingWorld;
+            return result;
+        }
+
+        static Vector3 LockDirVector()
+        {
+            float rad = lockAngle * Mathf.Deg2Rad;
+            return new Vector3(Mathf.Cos(rad), 0, Mathf.Sin(rad));
+        }
+
+        static Vector3 ProjectOntoLockAxis(Vector3 worldPos)
+        {
+            Vector3 dir = LockDirVector();
+            Vector3 toMouse = worldPos - lockAnchorWorld;
+            toMouse.y = 0;
+            float projDist = Vector3.Dot(toMouse, dir);
+            Vector3 projected = lockAnchorWorld + dir * projDist;
+            projected.y = worldPos.y;
+            return projected;
         }
 
         static void PaintLine(float u0, float v0, float u1, float v1, bool erase)
@@ -584,6 +740,9 @@ namespace Jibbers.MapTools
                 h = h * 31 + ins.crossSectionSideFlatten.GetHashCode();
                 h = h * 31 + ins.edgeBlend.GetHashCode();
                 h = h * 31 + ins.edgeFalloff.GetHashCode();
+                h = h * 31 + (int) ins.edgeBlendMode;
+                h = h * 31 + ins.tiltDepth.GetHashCode();
+                h = h * 31 + AnimCurveHash(ins.tiltCurve);
                 h = h * 31 + AnimCurveHash(ins.curve);
                 h = h * 31 + AnimCurveHash(ins.crossSection);
                 if (editor.terrain != null)
@@ -619,7 +778,7 @@ namespace Jibbers.MapTools
             }
 
             var fwd   = (b - a).normalized;
-            var right = Vector3.Cross(fwd, Vector3.up);
+            var right = Vector3.Cross(Vector3.up, fwd);
             float halfW   = ins.width * 0.5f * idxToDist;
             float flatten = ins.crossSectionSideFlatten;
 
@@ -668,7 +827,9 @@ namespace Jibbers.MapTools
                             sf = f * f * (3f - 2f * f);
                         }
                         float crossH = ins.crossSection.Evaluate(ct) * ins.crossSectionDepth;
-                        float h = Mathf.Lerp(flatY, curveY + crossH, sf);
+                        float tiltVal = ins.tiltCurve != null ? ins.tiltCurve.Evaluate(lt) : 0f;
+                        float tiltBias = tiltVal * ins.tiltDepth * (ct - 0.5f);
+                        float h = Mathf.Lerp(flatY, curveY + crossH + tiltBias, sf);
                         float lateralOffset = (ct - 0.5f) * ins.width * idxToDist;
                         section[j] = baseXZ + right * lateralOffset + Vector3.up * h;
                     }
@@ -687,6 +848,18 @@ namespace Jibbers.MapTools
             };
         }
 
+        static void SetAllPreviews(BetterTerrainEditor editor, bool value)
+        {
+            Undo.RecordObject(editor, value ? "Show All Previews" : "Hide All Previews");
+            if (editor.curveInserts  != null) foreach (var ins in editor.curveInserts)  if (ins != null) ins.drawPreview = value;
+            if (editor.circleInserts != null) foreach (var ins in editor.circleInserts) if (ins != null) ins.drawPreview = value;
+            if (editor.meshInserts   != null) foreach (var ins in editor.meshInserts)   if (ins != null) ins.drawPreview = value;
+            if (editor.copyInserts   != null) foreach (var ins in editor.copyInserts)   if (ins != null) ins.drawPreview = value;
+            if (editor.paintInserts  != null) foreach (var ins in editor.paintInserts)  if (ins != null) ins.drawPreview = value;
+            EditorUtility.SetDirty(editor);
+            SceneView.RepaintAll();
+        }
+
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
@@ -698,10 +871,17 @@ namespace Jibbers.MapTools
             meshList.DoLayoutList();
             EditorGUILayout.Space(4);
             copyList.DoLayoutList();
+            EditorGUILayout.Space(4);
+            paintList.DoLayoutList();
 
             serializedObject.ApplyModifiedProperties();
 
             editor = (BetterTerrainEditor)target;
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Show All Previews")) SetAllPreviews(editor, true);
+            if (GUILayout.Button("Hide All Previews")) SetAllPreviews(editor, false);
+            EditorGUILayout.EndHorizontal();
 
             if (editor.terrain != null && editor.terrain.materialTemplate != null
                 && !editor.terrain.materialTemplate.name.Contains("(Instance)"))
@@ -798,7 +978,26 @@ namespace Jibbers.MapTools
                 paintOpacity   = EditorGUILayout.Slider("Opacity",    paintOpacity,   0.01f, 1f);
                 paintHardness  = EditorGUILayout.Slider("Hardness",   paintHardness,  0f, 1f);
                 if (paintMode == 1)
+                {
+                    EditorGUILayout.Space(8);
                     paintMarkingIdx = EditorGUILayout.Popup("Marking Color", paintMarkingIdx, markingColorNames);
+                }
+
+                EditorGUILayout.Space(12);
+                lockDirection = EditorGUILayout.Toggle("Lock Direction", lockDirection);
+                if (lockDirection)
+                    lockAngle = EditorGUILayout.Slider("Lock Angle (°)", lockAngle, 0f, 180f);
+
+                EditorGUILayout.Space(12);
+                stripeBrush = EditorGUILayout.Toggle("Stripe Brush", stripeBrush);
+                if (stripeBrush)
+                {
+                    stripeAngle   = EditorGUILayout.Slider   ("Stripe Angle (°)", stripeAngle, 0f, 180f);
+                    stripeCount   = EditorGUILayout.IntSlider("Stripe Count",     stripeCount, 1, 16);
+                    stripeSpacing = EditorGUILayout.Slider   ("Stripe Spacing",   stripeSpacing, 1f, 500f);
+                }
+
+                EditorGUILayout.Space(12);
                 if (GUILayout.Button("Stop Painting"))
                     StopPainting();
             }
@@ -1009,6 +1208,63 @@ namespace Jibbers.MapTools
                         Handles.DrawLine(dd, da, 2f);
                     }
                 }
+
+                if (editor.paintInserts != null)
+                {
+                    foreach (var ins in editor.paintInserts)
+                    {
+                        if (ins.startX == ins.endX && ins.startY == ins.endY) continue;
+                        if (ins.lengthCurve == null || ins.crossSectionCurve == null) continue;
+
+                        Vector3 a = editor.HeightmapCoordToWorld(ins.startX, ins.startY);
+                        Vector3 b = editor.HeightmapCoordToWorld(ins.endX,   ins.endY);
+                        Vector3 baseDir = b - a;
+                        baseDir.y = 0;
+                        if (baseDir.sqrMagnitude < 1e-4f) continue;
+                        baseDir.Normalize();
+                        Vector3 perpDir = Vector3.Cross(Vector3.up, baseDir);
+
+                        float halfWidthWorld = ins.width * 0.5f * idxToDist;
+
+                        Color paintColor;
+                        if (ins.target == PaintTarget.Marking)
+                        {
+                            int idx = Mathf.Clamp(ins.markingColorIdx, 0, 15);
+                            float h = 0.05f + idx * 0.05f;
+                            Color rgb = Color.HSVToRGB(h, 1f, 1f);
+                            paintColor = new Color(rgb.r, rgb.g, rgb.b, 0.9f);
+                        }
+                        else
+                        {
+                            paintColor = new Color(1f, 1f, 1f, 0.9f);
+                        }
+
+                        if (!string.IsNullOrEmpty(ins.name))
+                            Handles.Label((a + b) * 0.5f, ins.name);
+
+                        Handles.color = paintColor;
+                        Handles.DrawLine(a - perpDir * halfWidthWorld, b - perpDir * halfWidthWorld, 1.5f);
+                        Handles.DrawLine(a + perpDir * halfWidthWorld, b + perpDir * halfWidthWorld, 1.5f);
+
+                        if (ins.drawPreview)
+                        {
+                            const int sampleCount = 200;
+                            bool wasAbove = false;
+                            for (int i = 0; i < sampleCount; i++)
+                            {
+                                float t = (float) i / (sampleCount - 1);
+                                float val = BetterTerrainEditor.EvalCurveRepeated(ins.lengthCurve, t, ins.repeatScaling, ins.repeats);
+                                bool isAbove = val > 0.5f;
+                                if (isAbove && !wasAbove)
+                                {
+                                    Vector3 center = Vector3.Lerp(a, b, t);
+                                    Handles.DrawLine(center - perpDir * halfWidthWorld, center + perpDir * halfWidthWorld, 1f);
+                                }
+                                wasAbove = isAbove;
+                            }
+                        }
+                    }
+                }
             };
         }
     }
@@ -1022,6 +1278,7 @@ namespace Jibbers.MapTools
         public List<TerrainCircleInsert> circleInserts;
         public List<TerrainMeshInsert>   meshInserts;
         public List<TerrainCopyInsert>   copyInserts;
+        public List<TerrainPaintInsert>  paintInserts;
 
         [HideInInspector] public Terrain terrain;
         TerrainData data;
@@ -1043,6 +1300,7 @@ namespace Jibbers.MapTools
 
         ComputeBuffer curveBakeBuffer;
         ComputeBuffer crossSectionBakeBuffer;
+        ComputeBuffer tiltBakeBuffer;
 
         void OnEnable()
         {
@@ -1092,6 +1350,7 @@ namespace Jibbers.MapTools
             if (heightRT != null) { heightRT.Release(); heightRT = null; }
             if (curveBakeBuffer != null) { curveBakeBuffer.Release(); curveBakeBuffer = null; }
             if (crossSectionBakeBuffer != null) { crossSectionBakeBuffer.Release(); crossSectionBakeBuffer = null; }
+            if (tiltBakeBuffer != null) { tiltBakeBuffer.Release(); tiltBakeBuffer = null; }
         }
 
         public void BakeCurve(AnimationCurve curve, int resolution, float repeatScaling, int repeats, float transitionFade = 0f)
@@ -1155,6 +1414,18 @@ namespace Jibbers.MapTools
             crossSectionBakeBuffer = new ComputeBuffer(resolution, sizeof(float));
             crossSectionBakeBuffer.SetData(d);
             terrainEditShader.SetInt("bakedCrossSectionRes", resolution);
+        }
+
+        public void BakeTilt(AnimationCurve tilt, int resolution)
+        {
+            float[] d = new float[resolution];
+            for (int i = 0; i < resolution; i++)
+                d[i] = tilt.Evaluate((float)i / resolution);
+
+            tiltBakeBuffer?.Release();
+            tiltBakeBuffer = new ComputeBuffer(resolution, sizeof(float));
+            tiltBakeBuffer.SetData(d);
+            terrainEditShader.SetInt("bakedTiltRes", resolution);
         }
 
         public void Reload()
@@ -1244,10 +1515,12 @@ namespace Jibbers.MapTools
             Reload();
             BakeCurve(insert.curve, insert.bakeResolution, insert.repeatScaling, insert.repeats, insert.repeatTransitionFade);
             BakeCrossSection(insert.crossSection, insert.crossSectionBakeRes);
+            BakeTilt(insert.tiltCurve, insert.bakeResolution);
 
             terrainEditShader.SetTexture(curveKernel, "Heightmap", heightRT);
             terrainEditShader.SetBuffer(curveKernel, "BakedCurve", curveBakeBuffer);
             terrainEditShader.SetBuffer(curveKernel, "BakedCrossSection", crossSectionBakeBuffer);
+            terrainEditShader.SetBuffer(curveKernel, "BakedTilt", tiltBakeBuffer);
             terrainEditShader.SetInts("start",  insert.startX, insert.startY);
             terrainEditShader.SetInts("end",    insert.endX,   insert.endY);
             terrainEditShader.SetFloat("topOverride",        insert.heightOverrides.x / data.size.y);
@@ -1257,6 +1530,8 @@ namespace Jibbers.MapTools
             terrainEditShader.SetFloat("crossSectionSideFlatten", insert.crossSectionSideFlatten);
             terrainEditShader.SetFloat("edgeBlend",         insert.edgeBlend);
             terrainEditShader.SetFloat("edgeFalloff",       insert.edgeFalloff);
+            terrainEditShader.SetInt("edgeBlendMode",       (int) insert.edgeBlendMode);
+            terrainEditShader.SetFloat("tiltDepth",         insert.tiltDepth / data.size.y);
             terrainEditShader.SetInt("res", resX);
 
             int groups = Mathf.CeilToInt(resX / 8f);
@@ -1280,6 +1555,14 @@ namespace Jibbers.MapTools
                 terrainEditShader.SetInt("bakedCrossSectionRes", 1);
             }
             terrainEditShader.SetBuffer(circleKernel, "BakedCrossSection", crossSectionBakeBuffer);
+
+            if (tiltBakeBuffer == null)
+            {
+                tiltBakeBuffer = new ComputeBuffer(1, sizeof(float));
+                tiltBakeBuffer.SetData(new float[] { 0f });
+                terrainEditShader.SetInt("bakedTiltRes", 1);
+            }
+            terrainEditShader.SetBuffer(circleKernel, "BakedTilt", tiltBakeBuffer);
 
             float normalizedOverride = insert.heightOverride < 0
                 ? -1f
@@ -1398,8 +1681,15 @@ namespace Jibbers.MapTools
                 crossSectionBakeBuffer.SetData(new float[] { 0f });
                 terrainEditShader.SetInt("bakedCrossSectionRes", 1);
             }
+            if (tiltBakeBuffer == null)
+            {
+                tiltBakeBuffer = new ComputeBuffer(1, sizeof(float));
+                tiltBakeBuffer.SetData(new float[] { 0f });
+                terrainEditShader.SetInt("bakedTiltRes", 1);
+            }
             terrainEditShader.SetBuffer(meshStampKernel, "BakedCurve", curveBakeBuffer);
             terrainEditShader.SetBuffer(meshStampKernel, "BakedCrossSection", crossSectionBakeBuffer);
+            terrainEditShader.SetBuffer(meshStampKernel, "BakedTilt", tiltBakeBuffer);
 
             terrainEditShader.SetTexture(meshStampKernel, "Heightmap", heightRT);
             terrainEditShader.SetTexture(meshStampKernel, "MeshDepthTex", depthTex);
@@ -1413,6 +1703,146 @@ namespace Jibbers.MapTools
 
             DestroyImmediate(depthTex);
             ReadBackRTData();
+        }
+
+        public void BuildPaint(TerrainPaintInsert insert)
+        {
+#if UNITY_EDITOR
+            var mat = terrain.materialTemplate;
+            if (mat == null || !mat.HasProperty("_SnowMask"))
+            {
+                Debug.LogError("[BetterTerrainEditor] Terrain material has no _SnowMask property.");
+                return;
+            }
+            var tex = mat.GetTexture("_SnowMask") as Texture2D;
+            if (tex == null)
+            {
+                Debug.LogError("[BetterTerrainEditor] Terrain has no snow mask texture assigned.");
+                return;
+            }
+            if (!tex.isReadable)
+            {
+                Debug.LogError($"[BetterTerrainEditor] Snow mask '{tex.name}' must be readable.");
+                return;
+            }
+            if (insert.lengthCurve == null || insert.crossSectionCurve == null) return;
+
+            UnityEditor.Undo.RegisterCompleteObjectUndo(tex, "Paint Insert: " + insert.name);
+
+            int maskW = tex.width;
+            int maskH = tex.height;
+            var pixels = tex.GetPixels();
+
+            Vector2 a = HeightmapToMaskPixel(insert.startX, insert.startY, maskW, maskH);
+            Vector2 b = HeightmapToMaskPixel(insert.endX,   insert.endY,   maskW, maskH);
+
+            Vector2 dirVec = b - a;
+            if (dirVec.sqrMagnitude < 1e-4f) return;
+            float lenMask = dirVec.magnitude;
+            Vector2 dir = dirVec / lenMask;
+            Vector2 perp = new Vector2(-dir.y, dir.x);
+
+            float hToMask = (float) maskW / (resX - 1);
+            float widthMask = insert.width * hToMask;
+            float halfWidthMask = widthMask * 0.5f;
+
+            float[] bucketValues = { 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.55f, 0.60f, 0.65f, 0.70f, 0.75f, 0.80f };
+            int colorIdx = Mathf.Clamp(insert.markingColorIdx, 0, bucketValues.Length - 1);
+            float markColor = bucketValues[colorIdx];
+
+            float minX = Mathf.Min(a.x, b.x) - halfWidthMask;
+            float maxX = Mathf.Max(a.x, b.x) + halfWidthMask;
+            float minY = Mathf.Min(a.y, b.y) - halfWidthMask;
+            float maxY = Mathf.Max(a.y, b.y) + halfWidthMask;
+
+            int px0 = Mathf.Max(0,         Mathf.FloorToInt(minX));
+            int px1 = Mathf.Min(maskW - 1, Mathf.CeilToInt(maxX));
+            int py0 = Mathf.Max(0,         Mathf.FloorToInt(minY));
+            int py1 = Mathf.Min(maskH - 1, Mathf.CeilToInt(maxY));
+
+            for (int py = py0; py <= py1; py++)
+            {
+                for (int px = px0; px <= px1; px++)
+                {
+                    Vector2 p = new Vector2(px + 0.5f, py + 0.5f);
+                    Vector2 toP = p - a;
+                    float along = Vector2.Dot(toP, dir) / lenMask;
+                    if (along < 0f || along > 1f) continue;
+
+                    float across = Vector2.Dot(toP, perp);
+                    if (Mathf.Abs(across) > halfWidthMask) continue;
+                    float ct = (across + halfWidthMask) / widthMask;
+
+                    float lengthVal = EvalCurveRepeated(insert.lengthCurve, along, insert.repeatScaling, insert.repeats);
+                    float crossVal  = insert.crossSectionCurve.Evaluate(ct);
+                    float cov = Mathf.Clamp01(lengthVal * crossVal * insert.coverage);
+                    if (cov <= 0f) continue;
+
+                    int idx = py * maskW + px;
+                    var c = pixels[idx];
+
+                    if (insert.target == PaintTarget.Snow)
+                    {
+                        float t = insert.erase ? 0f : 1f;
+                        c.r = Mathf.Lerp(c.r, t, cov);
+                    }
+                    else
+                    {
+                        if (insert.erase)
+                        {
+                            c.b = Mathf.Lerp(c.b, 0f, cov);
+                        }
+                        else
+                        {
+                            c.g = markColor;
+                            c.b = Mathf.Lerp(c.b, 1f, cov);
+                        }
+                    }
+
+                    pixels[idx] = c;
+                }
+            }
+
+            tex.SetPixels(pixels);
+            tex.Apply();
+            UnityEditor.EditorUtility.SetDirty(tex);
+#endif
+        }
+
+        Vector2 HeightmapToMaskPixel(int hx, int hy, int maskW, int maskH)
+        {
+            float u = (float) hx / (resX - 1);
+            float v = (float) hy / (resY - 1);
+            return new Vector2(u * maskW, (1f - v) * maskH);
+        }
+
+        public static float EvalCurveRepeated(AnimationCurve curve, float t, float scalePerRepeat, int repeats)
+        {
+            if (curve == null) return 0f;
+            if (repeats <= 1) return curve.Evaluate(t);
+
+            float[] scales = new float[repeats];
+            float total = 0f;
+            float current = 1f;
+            for (int i = 0; i < repeats; i++)
+            {
+                scales[i] = current;
+                total += current;
+                current *= scalePerRepeat;
+            }
+            for (int i = 0; i < repeats; i++) scales[i] /= total;
+
+            float cumStart = 0f;
+            int section = repeats - 1;
+            for (int i = 0; i < repeats; i++)
+            {
+                float cumEnd = cumStart + scales[i];
+                if (t < cumEnd) { section = i; break; }
+                cumStart = cumEnd;
+            }
+            float sectionEnd = cumStart + scales[section];
+            float sectionT = sectionEnd > cumStart ? Mathf.InverseLerp(cumStart, sectionEnd, t) : 0f;
+            return curve.Evaluate(sectionT);
         }
 
         public void BuildCopy(TerrainCopyInsert insert)

@@ -49,32 +49,66 @@ namespace Jibbers.MapTools
     }
 #endif
 
-    public class CustomMapObjectPartData : ISerializable
+    public enum CustomObjectRenderMode { Opaque = 0, AlphaClip = 1, Transparent = 2 }
+
+    public class CustomMapObjectMaterialData : ISerializable
     {
 
-        public string meshRef;
         public string baseTexRef;
         public string metallicTexRef;
         public string roughnessTexRef;
         public string normalTexRef;
 
+        public CustomObjectRenderMode renderMode;
+        public float                  alphaCutoff = 0.5f;
+
+        public Vector2 tiling = Vector2.one;
+        public Vector2 offset = Vector2.zero;
+        public int     cullMode = 2;
+        public Color   baseColor = Color.white;
+
+        public CustomMapObjectMaterialData() {}
+
+        public void Serialize(ISerializer serializer)
+        {
+            baseTexRef      = serializer.SerializeString("base-tex", baseTexRef ?? "");
+            metallicTexRef  = serializer.SerializeString("metallic-tex", metallicTexRef ?? "");
+            roughnessTexRef = serializer.SerializeString("roughness-tex", roughnessTexRef ?? "");
+            normalTexRef    = serializer.SerializeString("normal-tex", normalTexRef ?? "");
+            renderMode      = (CustomObjectRenderMode) serializer.SerializeInt("render-mode", (int) renderMode);
+            alphaCutoff     = serializer.SerializeFloat("alpha-cutoff", alphaCutoff);
+            tiling          = serializer.SerializeVector2("tiling", tiling);
+            offset          = serializer.SerializeVector2("offset", offset);
+            cullMode        = serializer.SerializeInt("cull-mode", cullMode);
+            baseColor.r     = serializer.SerializeFloat("base-color-r", baseColor.r);
+            baseColor.g     = serializer.SerializeFloat("base-color-g", baseColor.g);
+            baseColor.b     = serializer.SerializeFloat("base-color-b", baseColor.b);
+            baseColor.a     = serializer.SerializeFloat("base-color-a", baseColor.a);
+        }
+
+    }
+
+    public class CustomMapObjectPartData : ISerializable
+    {
+
+        public string meshRef;
+
         public Vector3 localPosition;
         public Vector3 localRotation;
         public Vector3 localScale;
+
+        public CustomMapObjectMaterialData[] materials;
 
         public CustomMapObjectPartData() {}
 
         public void Serialize(ISerializer serializer)
         {
-            meshRef         = serializer.SerializeString("mesh", meshRef ?? "");
-            baseTexRef      = serializer.SerializeString("base-tex", baseTexRef ?? "");
-            metallicTexRef  = serializer.SerializeString("metallic-tex", metallicTexRef ?? "");
-            roughnessTexRef = serializer.SerializeString("roughness-tex", roughnessTexRef ?? "");
-            normalTexRef    = serializer.SerializeString("normal-tex", normalTexRef ?? "");
-
+            meshRef       = serializer.SerializeString("mesh", meshRef ?? "");
             localPosition = serializer.SerializeVector3("local-position", localPosition);
             localRotation = serializer.SerializeVector3("local-rotation", localRotation);
             localScale    = serializer.SerializeVector3("local-scale", localScale);
+
+            serializer.SerializeSerializableArray("materials", ref materials, () => new CustomMapObjectMaterialData());
         }
 
     }

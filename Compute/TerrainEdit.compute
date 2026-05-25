@@ -25,6 +25,11 @@ float crossSectionDepth;
 float crossSectionSideFlatten;
 float edgeBlend;
 float edgeFalloff;
+int   edgeBlendMode; // 0 = All, 1 = Sides (left/right), 2 = Ends (front/back)
+
+StructuredBuffer<float> BakedTilt;
+int bakedTiltRes;
+float tiltDepth;
 
 // ── Circle params ────────────────────────────────────────────────────────────
 int2  circleCenter;
@@ -47,6 +52,14 @@ float SampleBakedCrossSection(float t)
     int   lo = (int)floor(fi);
     int   hi = (int)ceil(fi);
     return lerp(BakedCrossSection[lo], BakedCrossSection[hi], frac(fi));
+}
+
+float SampleBakedTilt(float t)
+{
+    float fi = t * (bakedTiltRes - 1);
+    int   lo = (int)floor(fi);
+    int   hi = (int)ceil(fi);
+    return lerp(BakedTilt[lo], BakedTilt[hi], frac(fi));
 }
 
 // ── Curve kernel ─────────────────────────────────────────────────────────────
@@ -83,15 +96,21 @@ void Curve(uint3 id : SV_DispatchThreadID)
     float crossT = saturate(lx / curveWidth);
     float crossVal = SampleBakedCrossSection(crossT) * crossSectionDepth;
 
+    float tiltVal  = SampleBakedTilt(t);
+    float tiltBias = tiltVal * tiltDepth * (crossT - 0.5);
+
     float edgeDist = min(crossT, 1.0 - crossT);
     float sideFade = crossSectionSideFlatten > 0 ? saturate(edgeDist / crossSectionSideFlatten) : 1.0;
     sideFade = sideFade * sideFade * (3.0 - 2.0 * sideFade);
 
-    float curveResult = lerp(flatH, curveH + crossVal, sideFade);
+    float curveResult = lerp(flatH, curveH + crossVal + tiltBias, sideFade);
 
     float edgeT = min(t, 1.0 - t);
     float edgeC = min(crossT, 1.0 - crossT);
-    float edge  = min(edgeT, edgeC);
+    float edge;
+    if (edgeBlendMode == 1)      edge = edgeC;             // Sides (left/right)
+    else if (edgeBlendMode == 2) edge = edgeT;             // Ends (front/back)
+    else                         edge = min(edgeT, edgeC); // All
     float blend;
     if (edgeBlend > 0)
     {

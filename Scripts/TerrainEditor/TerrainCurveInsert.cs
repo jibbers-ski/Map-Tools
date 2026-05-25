@@ -46,10 +46,17 @@ namespace Jibbers.MapTools
             EditorGUI.Slider(Row(), property.FindPropertyRelative("crossSectionSideFlatten"),
                 0f, 0.5f, "crossSectionSideFlatten");
 
+            EditorGUI.CurveField(Row(10), property.FindPropertyRelative("tiltCurve"),
+                MoreColors.Orange, new Rect(0, -1, 1, 2), new GUIContent("tiltCurve"));
+            EditorGUI.PropertyField(Row(), property.FindPropertyRelative("tiltDepth"),
+                new GUIContent("tiltDepth"));
+
             EditorGUI.Slider(Row(10), property.FindPropertyRelative("edgeBlend"),
                 0f, 0.5f, "edgeBlend");
             EditorGUI.Slider(Row(), property.FindPropertyRelative("edgeFalloff"),
                 0.25f, 4f, "edgeFalloff");
+            EditorGUI.PropertyField(Row(), property.FindPropertyRelative("edgeBlendMode"),
+                new GUIContent("edgeBlendMode"));
 
             EditorGUI.PropertyField(Row(10), property.FindPropertyRelative("repeats"),
                 new GUIContent("repeats"));
@@ -71,10 +78,12 @@ namespace Jibbers.MapTools
         {
             float line = EditorGUIUtility.singleLineHeight;
             if (!property.isExpanded) return line;
-            return line + (20 * (line + Spacing)) + 80f;
+            return line + (23 * (line + Spacing)) + 90f;
         }
     }
 #endif
+
+    public enum EdgeBlendMode { All, Sides, Ends }
 
     [Serializable]
     public class TerrainCurveInsert : TerrainInsert
@@ -103,6 +112,10 @@ namespace Jibbers.MapTools
         [Range(0, 0.5f)]
         public float          crossSectionSideFlatten = 0;
 
+        [Space(20)]
+        public AnimationCurve tiltCurve = AnimationCurve.Constant(0, 1, 0);
+        public float          tiltDepth = 0;
+
         [Range(0, 0.5f)]
         public float          repeatTransitionFade    = 0;
 
@@ -111,6 +124,8 @@ namespace Jibbers.MapTools
 
         [Range(0.25f, 4f)]
         public float          edgeFalloff             = 1;
+
+        public EdgeBlendMode  edgeBlendMode           = EdgeBlendMode.All;
 
         [NonSerialized] public PreviewCache cache;
 

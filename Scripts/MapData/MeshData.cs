@@ -9,12 +9,25 @@ namespace Jibbers.MapTools
     {
 
         public int vertexCount;
-        public int triangleCount;
 
         public byte[] vertexData;
         public byte[] normalData;
         public byte[] uvData;
-        public byte[] triangleData;
+
+        public byte[][] submeshTriangleData;
+
+        public int triangleCount
+        {
+            get
+            {
+                if (submeshTriangleData == null) return 0;
+                int total = 0;
+                for (int i = 0; i < submeshTriangleData.Length; i++)
+                    if (submeshTriangleData[i] != null)
+                        total += submeshTriangleData[i].Length / sizeof(int);
+                return total;
+            }
+        }
 
         public MeshData() {}
 
@@ -30,20 +43,30 @@ namespace Jibbers.MapTools
             var uvs = mesh.uv;
             uvData = (uvs != null && uvs.Length > 0) ? PackVector2Array(uvs) : null;
 
-            var tris = mesh.triangles;
-            triangleCount = tris.Length;
-            triangleData = new byte[triangleCount * sizeof(int)];
-            Buffer.BlockCopy(tris, 0, triangleData, 0, triangleData.Length);
+            int sm = Mathf.Max(1, mesh.subMeshCount);
+            submeshTriangleData = new byte[sm][];
+            for (int i = 0; i < sm; i++)
+            {
+                var tris = mesh.GetTriangles(i);
+                var data = new byte[tris.Length * sizeof(int)];
+                Buffer.BlockCopy(tris, 0, data, 0, data.Length);
+                submeshTriangleData[i] = data;
+            }
         }
 
         public void Serialize(ISerializer serializer)
         {
-            vertexCount   = serializer.SerializeInt("vertex-count", vertexCount);
-            triangleCount = serializer.SerializeInt("triangle-count", triangleCount);
-            vertexData    = serializer.SerializeBytes("vertices", vertexData);
-            normalData    = serializer.SerializeBytes("normals", normalData);
-            uvData        = serializer.SerializeBytes("uvs", uvData);
-            triangleData  = serializer.SerializeBytes("triangles", triangleData);
+            vertexCount = serializer.SerializeInt("vertex-count", vertexCount);
+            vertexData  = serializer.SerializeBytes("vertices", vertexData);
+            normalData  = serializer.SerializeBytes("normals", normalData);
+            uvData      = serializer.SerializeBytes("uvs", uvData);
+
+            int sm = serializer.SerializeInt("submesh-count", submeshTriangleData != null ? submeshTriangleData.Length : 0);
+            if (serializer.IsReader)
+                submeshTriangleData = new byte[sm][];
+            for (int i = 0; i < sm; i++)
+                submeshTriangleData[i] = serializer.SerializeBytes("triangles-" + i,
+                    submeshTriangleData != null ? submeshTriangleData[i] : null);
         }
 
         public Mesh GetMesh()
@@ -55,9 +78,16 @@ namespace Jibbers.MapTools
 
             mesh.vertices = UnpackVector3Array(vertexData, vertexCount);
 
-            var tris = new int[triangleCount];
-            Buffer.BlockCopy(triangleData, 0, tris, 0, triangleData.Length);
-            mesh.triangles = tris;
+            int sm = submeshTriangleData != null ? submeshTriangleData.Length : 0;
+            mesh.subMeshCount = Mathf.Max(1, sm);
+            for (int i = 0; i < sm; i++)
+            {
+                var data = submeshTriangleData[i];
+                if (data == null) continue;
+                var tris = new int[data.Length / sizeof(int)];
+                Buffer.BlockCopy(data, 0, tris, 0, data.Length);
+                mesh.SetTriangles(tris, i);
+            }
 
             if (normalData != null && normalData.Length > 0)
                 mesh.normals = UnpackVector3Array(normalData, vertexCount);

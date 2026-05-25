@@ -5,7 +5,7 @@ Shader "Custom/BasicSnowTerrain"
         _BaseColor ("Snow Color", Color) = (1,1,1,1)
         _RockColor ("Rock Color", Color) = (0.35, 0.3, 0.28, 1)
         _SnowMask ("Snow Mask", 2D) = "white" {}
-        _MarkingTint ("Marking Tint Strength", Range(0, 1)) = 0.3
+        _MarkingTint ("Marking Tint Strength", Range(0, 1)) = 0.7
         [Toggle] _SnowMask4Channel ("Snow Mask 4-Channel", Float) = 0
     }
 
@@ -73,11 +73,13 @@ Shader "Custom/BasicSnowTerrain"
 
                 float coverage = _SnowMask4Channel > 0.5 ? maskBilinear.b : 0;
                 float marking  = _SnowMask4Channel > 0.5 ? SAMPLE_TEXTURE2D_LOD(_SnowMask, sampler_point_clamp, maskUv, 0).g : 0;
-                float snapped  = round(marking * 5.0) / 5.0;
+                float snapped  = round(marking * 20.0) / 20.0;
                 if (snapped > 0 && snapped < 1.0 && coverage > 0)
                 {
                     float3 tint = HsvToRgb(snapped, 1.0, 1.0);
-                    col = lerp(col, col * tint, _MarkingTint * coverage);
+                    float luminance = dot(col, float3(0.299, 0.587, 0.114));
+                    float3 markingCol = tint * max(luminance, 0.5);
+                    col = lerp(col, markingCol, _MarkingTint * coverage);
                 }
 
                 Light mainLight = GetMainLight();
