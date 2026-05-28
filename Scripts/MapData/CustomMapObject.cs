@@ -58,6 +58,7 @@ namespace Jibbers.MapTools
         public string metallicTexRef;
         public string roughnessTexRef;
         public string normalTexRef;
+        public string emissionTexRef;
 
         public CustomObjectRenderMode renderMode;
         public float                  alphaCutoff = 0.5f;
@@ -66,6 +67,9 @@ namespace Jibbers.MapTools
         public Vector2 offset = Vector2.zero;
         public int     cullMode = 2;
         public Color   baseColor = Color.white;
+        public Color   emissionColor = Color.black;
+
+        public bool lit = true;
 
         public CustomMapObjectMaterialData() {}
 
@@ -75,6 +79,7 @@ namespace Jibbers.MapTools
             metallicTexRef  = serializer.SerializeString("metallic-tex", metallicTexRef ?? "");
             roughnessTexRef = serializer.SerializeString("roughness-tex", roughnessTexRef ?? "");
             normalTexRef    = serializer.SerializeString("normal-tex", normalTexRef ?? "");
+            emissionTexRef  = serializer.SerializeString("emission-tex", emissionTexRef ?? "");
             renderMode      = (CustomObjectRenderMode) serializer.SerializeInt("render-mode", (int) renderMode);
             alphaCutoff     = serializer.SerializeFloat("alpha-cutoff", alphaCutoff);
             tiling          = serializer.SerializeVector2("tiling", tiling);
@@ -84,6 +89,10 @@ namespace Jibbers.MapTools
             baseColor.g     = serializer.SerializeFloat("base-color-g", baseColor.g);
             baseColor.b     = serializer.SerializeFloat("base-color-b", baseColor.b);
             baseColor.a     = serializer.SerializeFloat("base-color-a", baseColor.a);
+            emissionColor.r = serializer.SerializeFloat("emission-color-r", emissionColor.r);
+            emissionColor.g = serializer.SerializeFloat("emission-color-g", emissionColor.g);
+            emissionColor.b = serializer.SerializeFloat("emission-color-b", emissionColor.b);
+            lit             = serializer.SerializeBool("lit", lit);
         }
 
     }
@@ -99,6 +108,11 @@ namespace Jibbers.MapTools
 
         public CustomMapObjectMaterialData[] materials;
 
+        public int lodGroupIndex = -1;
+        public int lodIndex = 0;
+
+        public int shadowCastingMode = 1;
+
         public CustomMapObjectPartData() {}
 
         public void Serialize(ISerializer serializer)
@@ -109,6 +123,35 @@ namespace Jibbers.MapTools
             localScale    = serializer.SerializeVector3("local-scale", localScale);
 
             serializer.SerializeSerializableArray("materials", ref materials, () => new CustomMapObjectMaterialData());
+
+            lodGroupIndex     = serializer.SerializeInt("lod-group-index", lodGroupIndex);
+            lodIndex          = serializer.SerializeInt("lod-index", lodIndex);
+            shadowCastingMode = serializer.SerializeInt("shadow-casting-mode", shadowCastingMode);
+        }
+
+    }
+
+    public class LODGroupData : ISerializable
+    {
+
+        public Vector3 localPosition;
+        public Vector3 localReferencePoint;
+        public float size = 1f;
+        public float[] transitions;
+
+        public LODGroupData() {}
+
+        public void Serialize(ISerializer serializer)
+        {
+            localPosition       = serializer.SerializeVector3("local-position", localPosition);
+            localReferencePoint = serializer.SerializeVector3("local-reference-point", localReferencePoint);
+            size                = serializer.SerializeFloat("size", size);
+
+            int count = serializer.SerializeInt("transition-count", transitions != null ? transitions.Length : 0);
+            if (serializer.IsReader)
+                transitions = new float[count];
+            for (int i = 0; i < count; i++)
+                transitions[i] = serializer.SerializeFloat("transition-" + i, transitions[i]);
         }
 
     }
@@ -129,6 +172,7 @@ namespace Jibbers.MapTools
 
         public CustomMapObjectPartData[] parts;
         public ColliderData[] colliders;
+        public LODGroupData[] lodGroups;
 
         public CustomMapObjectData() {}
 
@@ -150,6 +194,7 @@ namespace Jibbers.MapTools
 
             serializer.SerializeSerializableArray("parts", ref parts, () => new CustomMapObjectPartData());
             serializer.SerializeSerializableArray("colliders", ref colliders, () => new ColliderData());
+            serializer.SerializeSerializableArray("lod-groups", ref lodGroups, () => new LODGroupData());
         }
 
     }

@@ -33,6 +33,7 @@ namespace Jibbers.MapTools
         [SerializeField] string mapFileName;
         [SerializeField] Material material;
         [SerializeField] Material customObjectMaterial;
+        [SerializeField] Material customObjectUnlitMaterial;
 
         public void Import()
         {
@@ -163,6 +164,8 @@ namespace Jibbers.MapTools
                         rootGO.transform.position = obj.position;
                         rootGO.transform.rotation = Quaternion.Euler(obj.rotation);
 
+                        var partRenderersByLodGroup = new Dictionary<int, List<(int lodIndex, Renderer renderer)>>();
+
                         foreach (var part in obj.parts)
                         {
                             if (string.IsNullOrEmpty(part.meshRef) || !meshes.ContainsKey(part.meshRef)) continue;
@@ -180,30 +183,83 @@ namespace Jibbers.MapTools
                             for (int mi = 0; mi < matCount; mi++)
                             {
                                 var md = part.materials[mi];
-                                string matKey = $"{md.baseTexRef}|{md.metallicTexRef}|{md.roughnessTexRef}|{md.normalTexRef}|{(int) md.renderMode}|{md.alphaCutoff}|{md.tiling}|{md.offset}|{md.cullMode}|{md.baseColor}";
+                                string matKey = $"{md.baseTexRef}|{md.metallicTexRef}|{md.roughnessTexRef}|{md.normalTexRef}|{md.emissionTexRef}|{(int) md.renderMode}|{md.alphaCutoff}|{md.tiling}|{md.offset}|{md.cullMode}|{md.baseColor}|{md.emissionColor}|{md.lit}";
                                 if (!matCache.TryGetValue(matKey, out Material mat))
                                 {
-                                    mat = customObjectMaterial != null
-                                        ? new Material(customObjectMaterial)
-                                        : new Material(Shader.Find("Custom/CustomObjectLit"));
+                                    if (md.lit)
+                                        mat = customObjectMaterial != null
+                                            ? new Material(customObjectMaterial)
+                                            : new Material(Shader.Find("Custom/CustomObjectLit"));
+                                    else
+                                        mat = customObjectUnlitMaterial != null
+                                            ? new Material(customObjectUnlitMaterial)
+                                            : new Material(Shader.Find("Custom/CustomObjectUnlit"));
                                     SetTex(mat, "_BaseMap",        md.baseTexRef,      textures);
                                     SetTex(mat, "_MetallicMap",    md.metallicTexRef,  textures);
                                     SetTex(mat, "_RoughnessMap",   md.roughnessTexRef, textures);
                                     SetTex(mat, "_NormalMap",      md.normalTexRef,    textures);
+                                    SetTex(mat, "_EmissionMap",    md.emissionTexRef,  textures);
                                     if (mat.HasProperty("_BaseMap"))
                                     {
                                         mat.SetTextureScale("_BaseMap",  md.tiling);
                                         mat.SetTextureOffset("_BaseMap", md.offset);
                                     }
-                                    if (mat.HasProperty("_Cull"))      mat.SetFloat("_Cull",      md.cullMode);
-                                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", md.baseColor);
+                                    if (mat.HasProperty("_Cull"))          mat.SetFloat("_Cull",          md.cullMode);
+                                    if (mat.HasProperty("_BaseColor"))     mat.SetColor("_BaseColor",     md.baseColor);
+                                    if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", md.emissionColor);
                                     ApplyRenderMode(mat, md.renderMode, md.alphaCutoff);
+                                    mat.enableInstancing = true;
                                     matCache[matKey] = mat;
                                 }
                                 mats[mi] = mat;
                             }
 
-                            partGO.AddComponent<MeshRenderer>().sharedMaterials = mats;
+                            var partRenderer = partGO.AddComponent<MeshRenderer>();
+                            partRenderer.sharedMaterials = mats;
+                            partRenderer.shadowCastingMode = (UnityEngine.Rendering.ShadowCastingMode) part.shadowCastingMode;
+
+                            if (part.lodGroupIndex >= 0)
+                            {
+                                if (!partRenderersByLodGroup.TryGetValue(part.lodGroupIndex, out var list))
+                                    partRenderersByLodGroup[part.lodGroupIndex] = list = new List<(int, Renderer)>();
+                                list.Add((part.lodIndex, partRenderer));
+                            }
+                        }
+
+                        if (obj.lodGroups != null && obj.lodGroups.Length > 0)
+                        {
+                            for (int g = 0; g < obj.lodGroups.Length; g++)
+                            {
+                                var lgd = obj.lodGroups[g];
+                                var lgGO = new GameObject("LODGroup");
+                                lgGO.transform.SetParent(rootGO.transform, false);
+                                lgGO.transform.localPosition = lgd.localPosition;
+
+                                var lodGroup = lgGO.AddComponent<LODGroup>();
+                                lodGroup.localReferencePoint = lgd.localReferencePoint;
+                                lodGroup.size = lgd.size;
+
+                                var byLod = new Dictionary<int, List<Renderer>>();
+                                if (partRenderersByLodGroup.TryGetValue(g, out var entries))
+                                {
+                                    foreach (var (lodIdx, renderer) in entries)
+                                    {
+                                        renderer.transform.SetParent(lgGO.transform, true);
+                                        if (!byLod.TryGetValue(lodIdx, out var rs))
+                                            byLod[lodIdx] = rs = new List<Renderer>();
+                                        rs.Add(renderer);
+                                    }
+                                }
+
+                                int lodCount = lgd.transitions != null ? lgd.transitions.Length : 0;
+                                var lods = new LOD[lodCount];
+                                for (int i = 0; i < lodCount; i++)
+                                {
+                                    var rs = byLod.TryGetValue(i, out var list) ? list.ToArray() : Array.Empty<Renderer>();
+                                    lods[i] = new LOD(lgd.transitions[i], rs);
+                                }
+                                lodGroup.SetLODs(lods);
+                            }
                         }
                     }
                 }

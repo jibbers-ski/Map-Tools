@@ -11,14 +11,16 @@ namespace Jibbers.MapTools
 
         public override void OnGUI(MaterialEditor editor, MaterialProperty[] props)
         {
-            var modeProp    = FindProperty("_RenderMode", props);
-            var cutoffProp  = FindProperty("_Cutoff", props);
-            var cullProp    = FindProperty("_Cull", props);
-            var baseMap     = FindProperty("_BaseMap", props);
-            var baseColor   = FindProperty("_BaseColor", props);
-            var roughness   = FindProperty("_RoughnessMap", props);
-            var metallic    = FindProperty("_MetallicMap", props);
-            var normalMap   = FindProperty("_NormalMap", props);
+            var modeProp      = FindProperty("_RenderMode", props);
+            var cutoffProp    = FindProperty("_Cutoff", props);
+            var cullProp      = FindProperty("_Cull", props);
+            var baseMap       = FindProperty("_BaseMap", props);
+            var baseColor     = FindProperty("_BaseColor", props);
+            var roughness     = FindProperty("_RoughnessMap", props);
+            var metallic      = FindProperty("_MetallicMap", props);
+            var normalMap     = FindProperty("_NormalMap", props);
+            var emissionMap   = FindProperty("_EmissionMap", props);
+            var emissionColor = FindProperty("_EmissionColor", props);
 
             int mode = Mathf.Clamp((int) modeProp.floatValue, 0, modeNames.Length - 1);
 
@@ -36,6 +38,7 @@ namespace Jibbers.MapTools
             editor.TexturePropertySingleLine(new GUIContent("Roughness"), roughness);
             editor.TexturePropertySingleLine(new GUIContent("Metallic"),  metallic);
             editor.TexturePropertySingleLine(new GUIContent("Normal"),    normalMap);
+            editor.TexturePropertySingleLine(new GUIContent("Emission"),  emissionMap, emissionColor);
             editor.TextureScaleOffsetProperty(baseMap);
 
             EditorGUILayout.Space(6);

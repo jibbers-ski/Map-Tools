@@ -10,6 +10,7 @@ namespace Jibbers.MapTools
         public TextureFormat format;
         public int width;
         public int height;
+        public string encoding;
 
         public byte[] data;
 
@@ -23,6 +24,7 @@ namespace Jibbers.MapTools
             if (!texture.isReadable)
             {
                 Debug.LogError($"[TextureData] Texture '{texture.name}' is not readable. Enable Read/Write in import settings.");
+                encoding = "raw";
                 data = new byte[width * height * 4];
                 return;
             }
@@ -30,7 +32,8 @@ namespace Jibbers.MapTools
             var readable = new Texture2D(width, height, TextureFormat.RGBA32, false, true);
             readable.SetPixels(texture.GetPixels());
             readable.Apply();
-            data = readable.GetRawTextureData();
+            encoding = "png";
+            data = readable.EncodeToPNG();
         }
 
         public void Serialize(ISerializer serializer)
@@ -38,15 +41,23 @@ namespace Jibbers.MapTools
             format = (TextureFormat) serializer.SerializeInt("format", (int) format);
             width = serializer.SerializeInt("width", width);
             height = serializer.SerializeInt("height", height);
+            encoding = serializer.SerializeString("encoding", encoding ?? "");
             data = serializer.SerializeBytes("data", data);
         }
 
         public Texture2D GetTexture()
         {
-            var texture = new Texture2D(width, height, format, false, true);
-            texture.LoadRawTextureData(data);
-            texture.Apply(false, false);
-            return texture;
+            if (encoding == "png")
+            {
+                var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+                texture.LoadImage(data, false);
+                return texture;
+            }
+
+            var raw = new Texture2D(width, height, format, false, true);
+            raw.LoadRawTextureData(data);
+            raw.Apply(false, false);
+            return raw;
         }
 
     }

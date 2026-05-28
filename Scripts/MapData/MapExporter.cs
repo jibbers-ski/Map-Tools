@@ -148,6 +148,32 @@ namespace Jibbers.MapTools
                     Log($"  CustomMapObject '{obj.name}' (surface: {obj.surfaceType})");
                     var partsList = new List<CustomMapObjectPartData>();
 
+                    var lodGroupsInObj = obj.GetComponentsInChildren<LODGroup>();
+                    var rendererLodMap = new Dictionary<Renderer, (int groupIndex, int lodIndex)>();
+                    var lodGroupDataList = new List<LODGroupData>();
+                    for (int g = 0; g < lodGroupsInObj.Length; g++)
+                    {
+                        var lg = lodGroupsInObj[g];
+                        var lods = lg.GetLODs();
+                        var transitions = new float[lods.Length];
+                        for (int l = 0; l < lods.Length; l++)
+                        {
+                            transitions[l] = lods[l].screenRelativeTransitionHeight;
+                            if (lods[l].renderers == null) continue;
+                            foreach (var r in lods[l].renderers)
+                                if (r != null)
+                                    rendererLodMap[r] = (g, l);
+                        }
+
+                        lodGroupDataList.Add(new LODGroupData {
+                            localPosition       = root.InverseTransformPoint(lg.transform.position),
+                            localReferencePoint = lg.localReferencePoint,
+                            size                = lg.size,
+                            transitions         = transitions,
+                        });
+                        Log($"    LODGroup '{lg.gameObject.name}': {lods.Length} level(s)");
+                    }
+
                     foreach (var mf in obj.GetComponentsInChildren<MeshFilter>())
                     {
                         var mr = mf.GetComponent<MeshRenderer>();
@@ -155,7 +181,19 @@ namespace Jibbers.MapTools
                         Log($"    MeshFilter on '{mf.gameObject.name}': mesh={mf.sharedMesh?.name ?? "null"}, mats={(mats != null ? mats.Length : 0)}");
                         var part = ExtractPart(mf.sharedMesh, mats,
                             mf.transform, root, meshLibrary, textureLibrary);
-                        if (part != null) partsList.Add(part);
+                        if (part != null)
+                        {
+                            if (mr != null)
+                            {
+                                part.shadowCastingMode = (int) mr.shadowCastingMode;
+                                if (rendererLodMap.TryGetValue(mr, out var lod))
+                                {
+                                    part.lodGroupIndex = lod.groupIndex;
+                                    part.lodIndex     = lod.lodIndex;
+                                }
+                            }
+                            partsList.Add(part);
+                        }
                     }
 
                     foreach (var smr in obj.GetComponentsInChildren<SkinnedMeshRenderer>())
@@ -164,7 +202,16 @@ namespace Jibbers.MapTools
                         Log($"    SkinnedMeshRenderer on '{smr.gameObject.name}': mesh={smr.sharedMesh?.name ?? "null"}, mats={(mats != null ? mats.Length : 0)}");
                         var part = ExtractPart(smr.sharedMesh, mats,
                             smr.transform, root, meshLibrary, textureLibrary);
-                        if (part != null) partsList.Add(part);
+                        if (part != null)
+                        {
+                            part.shadowCastingMode = (int) smr.shadowCastingMode;
+                            if (rendererLodMap.TryGetValue(smr, out var lod))
+                            {
+                                part.lodGroupIndex = lod.groupIndex;
+                                part.lodIndex     = lod.lodIndex;
+                            }
+                            partsList.Add(part);
+                        }
                     }
 
                     if (partsList.Count == 0)
@@ -201,6 +248,7 @@ namespace Jibbers.MapTools
                         scale     = root.lossyScale,
                         parts     = partsList.ToArray(),
                         colliders = colliderList.Count > 0 ? colliderList.ToArray() : null,
+                        lodGroups = lodGroupDataList.Count > 0 ? lodGroupDataList.ToArray() : null,
                     });
                 }
 
@@ -263,12 +311,15 @@ namespace Jibbers.MapTools
                     metallicTexRef  = ExtractTexKey(mat, "_MetallicMap",  textureLibrary),
                     roughnessTexRef = ExtractTexKey(mat, "_RoughnessMap", textureLibrary),
                     normalTexRef    = ExtractTexKey(mat, "_NormalMap",    textureLibrary),
+                    emissionTexRef  = ExtractTexKey(mat, "_EmissionMap",  textureLibrary),
                     renderMode      = GetRenderMode(mat),
                     alphaCutoff     = mat != null && mat.HasProperty("_Cutoff") ? mat.GetFloat("_Cutoff") : 0.5f,
-                    tiling          = mat != null && mat.HasProperty("_BaseMap")   ? mat.GetTextureScale("_BaseMap")  : Vector2.one,
-                    offset          = mat != null && mat.HasProperty("_BaseMap")   ? mat.GetTextureOffset("_BaseMap") : Vector2.zero,
-                    cullMode        = mat != null && mat.HasProperty("_Cull")      ? (int) mat.GetFloat("_Cull")      : 2,
-                    baseColor       = mat != null && mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor")       : Color.white,
+                    tiling          = mat != null && mat.HasProperty("_BaseMap")     ? mat.GetTextureScale("_BaseMap")  : Vector2.one,
+                    offset          = mat != null && mat.HasProperty("_BaseMap")     ? mat.GetTextureOffset("_BaseMap") : Vector2.zero,
+                    cullMode        = mat != null && mat.HasProperty("_Cull")        ? (int) mat.GetFloat("_Cull")      : 2,
+                    baseColor       = mat != null && mat.HasProperty("_BaseColor")   ? mat.GetColor("_BaseColor")       : Color.white,
+                    emissionColor   = mat != null && mat.HasProperty("_EmissionColor") ? mat.GetColor("_EmissionColor") : Color.black,
+                    lit             = mat == null || mat.shader == null || mat.shader.name != "Custom/CustomObjectUnlit",
                 };
             }
 
