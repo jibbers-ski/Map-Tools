@@ -31,7 +31,39 @@ namespace Jibbers.MapTools
 
         public override void OnInspectorGUI()
         {
-            DrawDefaultInspector();
+            serializedObject.Update();
+            bool timeEnabled = false;
+            var iter = serializedObject.GetIterator();
+            iter.NextVisible(true);
+            while (iter.NextVisible(false))
+            {
+                if (iter.name == "overrideTime")
+                {
+                    EditorGUILayout.PropertyField(iter);
+                    timeEnabled = iter.boolValue;
+                }
+                else if (iter.name == "dayTime")
+                {
+                    EditorGUI.BeginDisabledGroup(!timeEnabled);
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.PropertyField(iter);
+                    int minutes = (720 + Mathf.RoundToInt(iter.floatValue * 720)) % 1440;
+                    EditorGUILayout.LabelField($"~{minutes / 60:00}:{minutes % 60:00}", GUILayout.Width(60));
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUI.EndDisabledGroup();
+                }
+                else if (iter.name == "sunAngle")
+                {
+                    EditorGUI.BeginDisabledGroup(!timeEnabled);
+                    EditorGUILayout.PropertyField(iter);
+                    EditorGUI.EndDisabledGroup();
+                }
+                else
+                {
+                    EditorGUILayout.PropertyField(iter, true);
+                }
+            }
+            serializedObject.ApplyModifiedProperties();
 
             EditorGUILayout.Space(20);
 
@@ -74,11 +106,17 @@ namespace Jibbers.MapTools
         [SerializeField] Vector3 camStartPosition;
         [SerializeField] bool allowBackgroundMountains = true;
 
+        [Header("Time of Day")]
+        [SerializeField] bool overrideTime;
+        [Range(0, 1)] public float dayTime;
+        [Range(0, 360)] public float sunAngle;
+
         [Header("Terrain Chunks")]
         public List<MapTerrainChunk> chunks;
 
         [Header("Debug")]
         public bool enableLogs;
+        public bool enableBreakdown;
 
         void Awake() {
             if(autoExportOnAwake)
@@ -156,9 +194,11 @@ namespace Jibbers.MapTools
                         var lg = lodGroupsInObj[g];
                         var lods = lg.GetLODs();
                         var transitions = new float[lods.Length];
+                        var fadeWidths  = new float[lods.Length];
                         for (int l = 0; l < lods.Length; l++)
                         {
                             transitions[l] = lods[l].screenRelativeTransitionHeight;
+                            fadeWidths[l]  = lods[l].fadeTransitionWidth;
                             if (lods[l].renderers == null) continue;
                             foreach (var r in lods[l].renderers)
                                 if (r != null)
@@ -170,8 +210,11 @@ namespace Jibbers.MapTools
                             localReferencePoint = lg.localReferencePoint,
                             size                = lg.size,
                             transitions         = transitions,
+                            fadeWidths          = fadeWidths,
+                            fadeMode            = (int) lg.fadeMode,
+                            animateCrossFading  = lg.animateCrossFading,
                         });
-                        Log($"    LODGroup '{lg.gameObject.name}': {lods.Length} level(s)");
+                        Log($"    LODGroup '{lg.gameObject.name}': {lods.Length} level(s), fade={lg.fadeMode}");
                     }
 
                     foreach (var mf in obj.GetComponentsInChildren<MeshFilter>())
@@ -214,12 +257,6 @@ namespace Jibbers.MapTools
                         }
                     }
 
-                    if (partsList.Count == 0)
-                    {
-                        Log($"    Skipped — no valid mesh parts");
-                        continue;
-                    }
-
                     var colliderList = new List<ColliderData>();
                     foreach (var col in obj.GetComponentsInChildren<Collider>())
                     {
@@ -234,7 +271,33 @@ namespace Jibbers.MapTools
                         colliderList.Add(cd);
                     }
 
-                    Log($"    Exported: {partsList.Count} part(s), {colliderList.Count} collider(s)");
+                    var lightList = new List<LightData>();
+                    foreach (var lt in obj.GetComponentsInChildren<Light>())
+                    {
+                        if (lt.type != LightType.Point && lt.type != LightType.Spot) continue;
+                        lightList.Add(new LightData
+                        {
+                            type            = (int) lt.type,
+                            localPosition   = lt.transform.position,
+                            localRotation   = lt.transform.rotation.eulerAngles,
+                            color           = lt.color,
+                            intensity       = lt.intensity,
+                            range           = lt.range,
+                            spotAngle       = lt.spotAngle,
+                            innerSpotAngle  = lt.innerSpotAngle,
+                            shadows         = (int) lt.shadows,
+                            shadowStrength  = lt.shadowStrength,
+                        });
+                        Log($"    Light on '{lt.gameObject.name}': type={lt.type}, range={lt.range}");
+                    }
+
+                    if (partsList.Count == 0 && lightList.Count == 0)
+                    {
+                        Log($"    Skipped — no valid mesh parts or lights");
+                        continue;
+                    }
+
+                    Log($"    Exported: {partsList.Count} part(s), {colliderList.Count} collider(s), {lightList.Count} light(s)");
 
                     customObjs.Add(new CustomMapObjectData
                     {
@@ -249,6 +312,7 @@ namespace Jibbers.MapTools
                         parts     = partsList.ToArray(),
                         colliders = colliderList.Count > 0 ? colliderList.ToArray() : null,
                         lodGroups = lodGroupDataList.Count > 0 ? lodGroupDataList.ToArray() : null,
+                        lights    = lightList.Count > 0 ? lightList.ToArray() : null,
                     });
                 }
 
@@ -266,6 +330,9 @@ namespace Jibbers.MapTools
                 id = idOverride,
                 camStartPosition = camStartPosition,
                 allowBackgroundMountains = allowBackgroundMountains,
+                overrideTime = overrideTime,
+                dayTime = dayTime,
+                sunAngle = sunAngle,
                 chunks = chunkDatas,
                 spawnPoints = spawnPoints.Select(s => new SpawnPointData(s)).ToArray(),
                 meshLibrary    = meshLibrary.Count > 0    ? meshLibrary    : null,
@@ -283,7 +350,83 @@ namespace Jibbers.MapTools
             var filePath = dirPath + map.id + ".jbrmap";
             File.WriteAllText(filePath, (string) serializer.Data);
             Debug.Log("Saved to: " + filePath);
+
+            if (enableBreakdown)
+                LogBreakdown(filePath, chunkDatas, meshLibrary, textureLibrary, spawnPoints.Length);
         }
+
+        static void LogBreakdown(string filePath, MapTerrainChunkData[] chunks,
+            Dictionary<string, MeshData> meshLib, Dictionary<string, TextureData> texLib, int spawnCount)
+        {
+            long terrainBytes = 0, snowMaskBytes = 0;
+            int customObjCount = 0, mapObjCount = 0;
+            foreach (var c in chunks)
+            {
+                terrainBytes  += c.terrainData?.Length ?? 0;
+                snowMaskBytes += c.snowMaskData?.data?.Length ?? 0;
+                customObjCount += c.customObjects?.Length ?? 0;
+                mapObjCount    += c.objects?.Length ?? 0;
+            }
+
+            long meshVerts = 0, meshNormals = 0, meshTangents = 0, meshColors = 0, meshUVs = 0, meshTris = 0;
+            foreach (var kv in meshLib)
+            {
+                var m = kv.Value;
+                meshVerts    += m.vertexData?.Length ?? 0;
+                meshNormals  += m.normalData?.Length ?? 0;
+                meshTangents += m.tangentData?.Length ?? 0;
+                meshColors   += m.colorData?.Length ?? 0;
+                meshUVs      += (m.uvData?.Length ?? 0) + (m.uv2Data?.Length ?? 0)
+                              + (m.uv3Data?.Length ?? 0) + (m.uv4Data?.Length ?? 0);
+                if (m.submeshTriangleData != null)
+                    foreach (var t in m.submeshTriangleData)
+                        meshTris += t?.Length ?? 0;
+            }
+            long meshTotal = meshVerts + meshNormals + meshTangents + meshColors + meshUVs + meshTris;
+
+            long texBytes = 0;
+            foreach (var kv in texLib)
+                texBytes += kv.Value.data?.Length ?? 0;
+
+            long rawTotal = terrainBytes + snowMaskBytes + meshTotal + texBytes;
+            long fileSize = new FileInfo(filePath).Length;
+
+            Debug.Log(
+                $"[MapExporter] Breakdown:\n" +
+                $"  File on disk:       {FmtBytes(fileSize)}\n" +
+                $"  Raw payload total:  {FmtBytes(rawTotal)} (pre-compression)\n" +
+                $"  Terrain heightmaps: {FmtBytes(terrainBytes)} ({chunks.Length} chunk(s))\n" +
+                $"  Snow masks:         {FmtBytes(snowMaskBytes)}\n" +
+                $"  Texture library:    {FmtBytes(texBytes)} ({texLib.Count} texture(s))\n" +
+                $"  Mesh library:       {FmtBytes(meshTotal)} ({meshLib.Count} mesh(es))\n" +
+                $"    Vertices:         {FmtBytes(meshVerts)}\n" +
+                $"    Normals:          {FmtBytes(meshNormals)}\n" +
+                $"    Tangents:         {FmtBytes(meshTangents)}\n" +
+                $"    Colors:           {FmtBytes(meshColors)}\n" +
+                $"    UVs (all sets):   {FmtBytes(meshUVs)}\n" +
+                $"    Triangles:        {FmtBytes(meshTris)}\n" +
+                $"  Map objects:        {mapObjCount}\n" +
+                $"  Custom objects:     {customObjCount}\n" +
+                $"  Spawn points:       {spawnCount}"
+            );
+        }
+
+        static string FmtBytes(long bytes)
+        {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("F1") + " KB";
+            return (bytes / 1048576.0).ToString("F2") + " MB";
+        }
+
+        static readonly HashSet<string> coreMaterialProperties = new HashSet<string> {
+            "_BaseMap", "_BaseColor",
+            "_MetallicMap", "_Metallic",
+            "_RoughnessMap", "_Smoothness",
+            "_NormalMap",
+            "_EmissionMap", "_EmissionColor",
+            "_Cull", "_Cutoff",
+            "_SrcBlend", "_DstBlend", "_ZWrite", "_RenderMode",
+        };
 
         static CustomMapObjectPartData ExtractPart(Mesh mesh, Material[] mats, Transform child, Transform root,
             Dictionary<string, MeshData> meshLibrary, Dictionary<string, TextureData> textureLibrary)
@@ -319,8 +462,11 @@ namespace Jibbers.MapTools
                     cullMode        = mat != null && mat.HasProperty("_Cull")        ? (int) mat.GetFloat("_Cull")      : 2,
                     baseColor       = mat != null && mat.HasProperty("_BaseColor")   ? mat.GetColor("_BaseColor")       : Color.white,
                     emissionColor   = mat != null && mat.HasProperty("_EmissionColor") ? mat.GetColor("_EmissionColor") : Color.black,
+                    metallic        = mat != null && mat.HasProperty("_Metallic")    ? mat.GetFloat("_Metallic")        : 0f,
+                    smoothness      = mat != null && mat.HasProperty("_Smoothness")  ? mat.GetFloat("_Smoothness")      : 0f,
                     lit             = mat == null || mat.shader == null || mat.shader.name != "Custom/CustomObjectUnlit",
                 };
+                ExtractExtras(mat, materials[i], textureLibrary);
             }
 
             var part = new CustomMapObjectPartData
@@ -333,6 +479,45 @@ namespace Jibbers.MapTools
             };
 
             return part;
+        }
+
+        static void ExtractExtras(Material mat, CustomMapObjectMaterialData md, Dictionary<string, TextureData> textureLibrary)
+        {
+            if (mat == null || mat.shader == null) return;
+
+            var extras = new Dictionary<string, MaterialPropertyData>();
+            int propCount = mat.shader.GetPropertyCount();
+            for (int p = 0; p < propCount; p++)
+            {
+                string name = mat.shader.GetPropertyName(p);
+                if (coreMaterialProperties.Contains(name)) continue;
+
+                var ptype = mat.shader.GetPropertyType(p);
+                switch (ptype)
+                {
+                    case UnityEngine.Rendering.ShaderPropertyType.Float:
+                    case UnityEngine.Rendering.ShaderPropertyType.Range:
+                        extras[name] = new MaterialPropertyData { type = 0, floatValue = mat.GetFloat(name) };
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Color:
+                        var col = mat.GetColor(name);
+                        extras[name] = new MaterialPropertyData { type = 1, vectorValue = new Vector4(col.r, col.g, col.b, col.a) };
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                        extras[name] = new MaterialPropertyData { type = 2, vectorValue = mat.GetVector(name) };
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                        var tex = mat.GetTexture(name) as Texture2D;
+                        if (tex == null) break;
+                        string texKey = GetAssetKey(tex);
+                        if (!textureLibrary.ContainsKey(texKey))
+                            textureLibrary[texKey] = new TextureData(tex);
+                        extras[name] = new MaterialPropertyData { type = 3, textureRef = texKey };
+                        break;
+                }
+            }
+            md.extraProps = extras.Count > 0 ? extras : null;
+            md.keywords = mat.shaderKeywords;
         }
 
         static CustomObjectRenderMode GetRenderMode(Material mat)
@@ -435,6 +620,18 @@ namespace Jibbers.MapTools
             cd.localPosition = t.TransformPoint(colliderCenter);
 
             return cd;
+        }
+
+        public void PopulateFromImport(MapData map, List<MapTerrainChunk> importedChunks)
+        {
+            mapName = map.name;
+            idOverride = map.id;
+            camStartPosition = map.camStartPosition;
+            allowBackgroundMountains = map.allowBackgroundMountains;
+            overrideTime = map.overrideTime;
+            dayTime = map.dayTime;
+            sunAngle = map.sunAngle;
+            chunks = importedChunks;
         }
 
         public void AutoImport()

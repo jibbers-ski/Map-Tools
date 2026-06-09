@@ -19,6 +19,10 @@ namespace Jibbers.MapTools
         public Vector3 camStartPosition;
         public bool allowBackgroundMountains;
 
+        public bool overrideTime;
+        public float dayTime;
+        public float sunAngle;
+
         public Dictionary<string, MeshData> meshLibrary;
         public Dictionary<string, TextureData> textureLibrary;
 
@@ -32,6 +36,10 @@ namespace Jibbers.MapTools
 
             camStartPosition = serializer.SerializeVector3("cam-start-position", camStartPosition);
             allowBackgroundMountains = serializer.SerializeBool("allow-background-mountains", allowBackgroundMountains);
+
+            overrideTime = serializer.SerializeBool("override-time", overrideTime);
+            dayTime = serializer.SerializeFloat("day-time", dayTime);
+            sunAngle = serializer.SerializeFloat("sun-angle", sunAngle);
 
             if(!headerOnly)
             {

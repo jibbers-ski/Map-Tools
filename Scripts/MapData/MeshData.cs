@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -12,7 +13,12 @@ namespace Jibbers.MapTools
 
         public byte[] vertexData;
         public byte[] normalData;
+        public byte[] tangentData;
+        public byte[] colorData;
         public byte[] uvData;
+        public byte[] uv2Data;
+        public byte[] uv3Data;
+        public byte[] uv4Data;
 
         public byte[][] submeshTriangleData;
 
@@ -37,11 +43,26 @@ namespace Jibbers.MapTools
 
             vertexData = PackVector3Array(mesh.vertices);
 
-            var normals = mesh.normals;
-            normalData = (normals != null && normals.Length > 0) ? PackVector3Array(normals) : null;
+            var normals  = mesh.normals;
+            normalData   = (normals != null && normals.Length > 0)  ? PackVector3Array(normals)  : null;
 
-            var uvs = mesh.uv;
-            uvData = (uvs != null && uvs.Length > 0) ? PackVector2Array(uvs) : null;
+            var tangents = mesh.tangents;
+            tangentData  = (tangents != null && tangents.Length > 0) ? PackVector4Array(tangents) : null;
+
+            var colors   = mesh.colors32;
+            colorData    = (colors != null && colors.Length > 0)    ? PackColor32Array(colors)   : null;
+
+            var uvs      = mesh.uv;
+            uvData       = (uvs != null && uvs.Length > 0)          ? PackVector2Array(uvs)      : null;
+
+            var uv2s     = mesh.uv2;
+            uv2Data      = (uv2s != null && uv2s.Length > 0)        ? PackVector2Array(uv2s)     : null;
+
+            var uv3s     = mesh.uv3;
+            uv3Data      = (uv3s != null && uv3s.Length > 0)        ? PackVector2Array(uv3s)     : null;
+
+            var uv4s     = mesh.uv4;
+            uv4Data      = (uv4s != null && uv4s.Length > 0)        ? PackVector2Array(uv4s)     : null;
 
             int sm = Mathf.Max(1, mesh.subMeshCount);
             submeshTriangleData = new byte[sm][];
@@ -59,7 +80,12 @@ namespace Jibbers.MapTools
             vertexCount = serializer.SerializeInt("vertex-count", vertexCount);
             vertexData  = serializer.SerializeBytes("vertices", vertexData);
             normalData  = serializer.SerializeBytes("normals", normalData);
+            tangentData = serializer.SerializeBytes("tangents", tangentData);
+            colorData   = serializer.SerializeBytes("colors", colorData);
             uvData      = serializer.SerializeBytes("uvs", uvData);
+            uv2Data     = serializer.SerializeBytes("uv2s", uv2Data);
+            uv3Data     = serializer.SerializeBytes("uv3s", uv3Data);
+            uv4Data     = serializer.SerializeBytes("uv4s", uv4Data);
 
             int sm = serializer.SerializeInt("submesh-count", submeshTriangleData != null ? submeshTriangleData.Length : 0);
             if (serializer.IsReader)
@@ -94,8 +120,25 @@ namespace Jibbers.MapTools
             else
                 mesh.RecalculateNormals();
 
+            if (tangentData != null && tangentData.Length > 0)
+                mesh.tangents = UnpackVector4Array(tangentData, vertexCount);
+            else
+                mesh.RecalculateTangents();
+
+            if (colorData != null && colorData.Length > 0)
+                mesh.colors32 = UnpackColor32Array(colorData, vertexCount);
+
             if (uvData != null && uvData.Length > 0)
                 mesh.uv = UnpackVector2Array(uvData, vertexCount);
+
+            if (uv2Data != null && uv2Data.Length > 0)
+                mesh.uv2 = UnpackVector2Array(uv2Data, vertexCount);
+
+            if (uv3Data != null && uv3Data.Length > 0)
+                mesh.uv3 = UnpackVector2Array(uv3Data, vertexCount);
+
+            if (uv4Data != null && uv4Data.Length > 0)
+                mesh.uv4 = UnpackVector2Array(uv4Data, vertexCount);
 
             mesh.RecalculateBounds();
             return mesh;
@@ -103,48 +146,57 @@ namespace Jibbers.MapTools
 
         static byte[] PackVector3Array(Vector3[] arr)
         {
-            var flat = new float[arr.Length * 3];
-            for (int i = 0; i < arr.Length; i++)
-            {
-                flat[i * 3]     = arr[i].x;
-                flat[i * 3 + 1] = arr[i].y;
-                flat[i * 3 + 2] = arr[i].z;
-            }
-            var bytes = new byte[flat.Length * sizeof(float)];
-            Buffer.BlockCopy(flat, 0, bytes, 0, bytes.Length);
+            var bytes = new byte[arr.Length * 12];
+            MemoryMarshal.AsBytes(arr.AsSpan()).CopyTo(bytes);
             return bytes;
         }
 
         static Vector3[] UnpackVector3Array(byte[] data, int count)
         {
-            var flat = new float[count * 3];
-            Buffer.BlockCopy(data, 0, flat, 0, data.Length);
             var arr = new Vector3[count];
-            for (int i = 0; i < count; i++)
-                arr[i] = new Vector3(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]);
+            data.AsSpan(0, count * 12).CopyTo(MemoryMarshal.AsBytes(arr.AsSpan()));
             return arr;
         }
 
         static byte[] PackVector2Array(Vector2[] arr)
         {
-            var flat = new float[arr.Length * 2];
-            for (int i = 0; i < arr.Length; i++)
-            {
-                flat[i * 2]     = arr[i].x;
-                flat[i * 2 + 1] = arr[i].y;
-            }
-            var bytes = new byte[flat.Length * sizeof(float)];
-            Buffer.BlockCopy(flat, 0, bytes, 0, bytes.Length);
+            var bytes = new byte[arr.Length * 8];
+            MemoryMarshal.AsBytes(arr.AsSpan()).CopyTo(bytes);
             return bytes;
         }
 
         static Vector2[] UnpackVector2Array(byte[] data, int count)
         {
-            var flat = new float[count * 2];
-            Buffer.BlockCopy(data, 0, flat, 0, data.Length);
             var arr = new Vector2[count];
-            for (int i = 0; i < count; i++)
-                arr[i] = new Vector2(flat[i * 2], flat[i * 2 + 1]);
+            data.AsSpan(0, count * 8).CopyTo(MemoryMarshal.AsBytes(arr.AsSpan()));
+            return arr;
+        }
+
+        static byte[] PackVector4Array(Vector4[] arr)
+        {
+            var bytes = new byte[arr.Length * 16];
+            MemoryMarshal.AsBytes(arr.AsSpan()).CopyTo(bytes);
+            return bytes;
+        }
+
+        static Vector4[] UnpackVector4Array(byte[] data, int count)
+        {
+            var arr = new Vector4[count];
+            data.AsSpan(0, count * 16).CopyTo(MemoryMarshal.AsBytes(arr.AsSpan()));
+            return arr;
+        }
+
+        static byte[] PackColor32Array(Color32[] arr)
+        {
+            var bytes = new byte[arr.Length * 4];
+            MemoryMarshal.AsBytes(arr.AsSpan()).CopyTo(bytes);
+            return bytes;
+        }
+
+        static Color32[] UnpackColor32Array(byte[] data, int count)
+        {
+            var arr = new Color32[count];
+            data.AsSpan(0, count * 4).CopyTo(MemoryMarshal.AsBytes(arr.AsSpan()));
             return arr;
         }
 

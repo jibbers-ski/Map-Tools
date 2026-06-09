@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Jibbers.MapTools
@@ -51,6 +52,37 @@ namespace Jibbers.MapTools
 
     public enum CustomObjectRenderMode { Opaque = 0, AlphaClip = 1, Transparent = 2 }
 
+    public class MaterialPropertyData : ISerializable
+    {
+        public int type;
+        public float floatValue;
+        public Vector4 vectorValue;
+        public string textureRef;
+
+        public MaterialPropertyData() {}
+
+        public void Serialize(ISerializer serializer)
+        {
+            type = serializer.SerializeInt("type", type);
+            switch (type)
+            {
+                case 0:
+                    floatValue = serializer.SerializeFloat("v", floatValue);
+                    break;
+                case 1:
+                case 2:
+                    vectorValue.x = serializer.SerializeFloat("x", vectorValue.x);
+                    vectorValue.y = serializer.SerializeFloat("y", vectorValue.y);
+                    vectorValue.z = serializer.SerializeFloat("z", vectorValue.z);
+                    vectorValue.w = serializer.SerializeFloat("w", vectorValue.w);
+                    break;
+                case 3:
+                    textureRef = serializer.SerializeString("ref", textureRef ?? "");
+                    break;
+            }
+        }
+    }
+
     public class CustomMapObjectMaterialData : ISerializable
     {
 
@@ -69,7 +101,13 @@ namespace Jibbers.MapTools
         public Color   baseColor = Color.white;
         public Color   emissionColor = Color.black;
 
+        public float metallic = 0f;
+        public float smoothness = 0f;
+
         public bool lit = true;
+
+        public Dictionary<string, MaterialPropertyData> extraProps;
+        public string[] keywords;
 
         public CustomMapObjectMaterialData() {}
 
@@ -92,7 +130,13 @@ namespace Jibbers.MapTools
             emissionColor.r = serializer.SerializeFloat("emission-color-r", emissionColor.r);
             emissionColor.g = serializer.SerializeFloat("emission-color-g", emissionColor.g);
             emissionColor.b = serializer.SerializeFloat("emission-color-b", emissionColor.b);
+            metallic        = serializer.SerializeFloat("metallic", metallic);
+            smoothness      = serializer.SerializeFloat("smoothness", smoothness);
             lit             = serializer.SerializeBool("lit", lit);
+
+            extraProps ??= new Dictionary<string, MaterialPropertyData>();
+            serializer.SerializeSerializableDict("extra-props", ref extraProps, k => new MaterialPropertyData(), true);
+            serializer.SerializeArray("keywords", ref keywords, (eId, val) => serializer.SerializeString(eId, val ?? ""));
         }
 
     }
@@ -138,6 +182,9 @@ namespace Jibbers.MapTools
         public Vector3 localReferencePoint;
         public float size = 1f;
         public float[] transitions;
+        public float[] fadeWidths;
+        public int fadeMode = 0;
+        public bool animateCrossFading = false;
 
         public LODGroupData() {}
 
@@ -146,12 +193,54 @@ namespace Jibbers.MapTools
             localPosition       = serializer.SerializeVector3("local-position", localPosition);
             localReferencePoint = serializer.SerializeVector3("local-reference-point", localReferencePoint);
             size                = serializer.SerializeFloat("size", size);
+            fadeMode            = serializer.SerializeInt("fade-mode", fadeMode);
+            animateCrossFading  = serializer.SerializeBool("animate-crossfading", animateCrossFading);
 
             int count = serializer.SerializeInt("transition-count", transitions != null ? transitions.Length : 0);
             if (serializer.IsReader)
+            {
                 transitions = new float[count];
+                fadeWidths  = new float[count];
+            }
             for (int i = 0; i < count; i++)
+            {
                 transitions[i] = serializer.SerializeFloat("transition-" + i, transitions[i]);
+                fadeWidths[i]  = serializer.SerializeFloat("fade-width-" + i, fadeWidths != null && i < fadeWidths.Length ? fadeWidths[i] : 0f);
+            }
+        }
+
+    }
+
+    public class LightData : ISerializable
+    {
+
+        public int type;
+        public Vector3 localPosition;
+        public Vector3 localRotation;
+        public Color color = Color.white;
+        public float intensity = 1f;
+        public float range = 10f;
+        public float spotAngle = 30f;
+        public float innerSpotAngle = 21.8f;
+        public int shadows;
+        public float shadowStrength = 1f;
+
+        public LightData() {}
+
+        public void Serialize(ISerializer serializer)
+        {
+            type            = serializer.SerializeInt("type", type);
+            localPosition   = serializer.SerializeVector3("local-position", localPosition);
+            localRotation   = serializer.SerializeVector3("local-rotation", localRotation);
+            color.r         = serializer.SerializeFloat("color-r", color.r);
+            color.g         = serializer.SerializeFloat("color-g", color.g);
+            color.b         = serializer.SerializeFloat("color-b", color.b);
+            intensity       = serializer.SerializeFloat("intensity", intensity);
+            range           = serializer.SerializeFloat("range", range);
+            spotAngle       = serializer.SerializeFloat("spot-angle", spotAngle);
+            innerSpotAngle  = serializer.SerializeFloat("inner-spot-angle", innerSpotAngle);
+            shadows         = serializer.SerializeInt("shadows", shadows);
+            shadowStrength  = serializer.SerializeFloat("shadow-strength", shadowStrength);
         }
 
     }
@@ -173,6 +262,7 @@ namespace Jibbers.MapTools
         public CustomMapObjectPartData[] parts;
         public ColliderData[] colliders;
         public LODGroupData[] lodGroups;
+        public LightData[] lights;
 
         public CustomMapObjectData() {}
 
@@ -195,6 +285,7 @@ namespace Jibbers.MapTools
             serializer.SerializeSerializableArray("parts", ref parts, () => new CustomMapObjectPartData());
             serializer.SerializeSerializableArray("colliders", ref colliders, () => new ColliderData());
             serializer.SerializeSerializableArray("lod-groups", ref lodGroups, () => new LODGroupData());
+            serializer.SerializeSerializableArray("lights", ref lights, () => new LightData());
         }
 
     }

@@ -7,7 +7,9 @@ Shader "Custom/CustomObjectLit"
 
         [Space(10)]
         _RoughnessMap("Roughness Map", 2D) = "white" {}
+        _Smoothness("Smoothness", Range(0,1)) = 0
         _MetallicMap("Metallic Map", 2D) = "black" {}
+        _Metallic("Metallic", Range(0,1)) = 0
         _NormalMap("Normal Map", 2D) = "bump" {}
 
         [Space(10)]
@@ -22,6 +24,32 @@ Shader "Custom/CustomObjectLit"
         [HideInInspector] _SrcBlend ("__src", Float) = 1.0
         [HideInInspector] _DstBlend ("__dst", Float) = 0.0
         [HideInInspector] _ZWrite ("__zw", Float) = 1.0
+
+        [HideInInspector] _UseOverlay ("__use_overlay", Float) = 0
+        [NoScaleOffset] _OverlayMap ("Overlay Map", 2D) = "white" {}
+        _OverlayColor ("Overlay Color", Color) = (1,1,1,1)
+        _OverlayDirection ("Overlay Direction", Vector) = (0,1,0,0)
+        _OverlayTiling ("Overlay Tiling", Float) = 1
+        _OverlayIntensity ("Overlay Intensity", Range(0,1)) = 1
+        _OverlayAmount ("Overlay Coverage", Range(-1,1)) = 0.4
+        _OverlaySharpness ("Overlay Sharpness", Range(0.001,2)) = 0.3
+        _OverlaySmoothness ("Overlay Smoothness", Range(0,1)) = 0.3
+        _OverlayNormalBlend ("Overlay Normal Blend", Range(0,1)) = 0.5
+
+        [HideInInspector] _UseOverlayFade ("__use_overlay_fade", Float) = 0
+        _OverlayFadeAxis ("Overlay Fade Axis", Vector) = (0,1,0,0)
+        _OverlayFadeMin ("Overlay Fade Min", Float) = 0
+        _OverlayFadeMax ("Overlay Fade Max", Float) = 1
+        [Toggle] _OverlayFadeObjectSpace ("Overlay Fade Object Space", Float) = 1
+
+        [HideInInspector] _UseLiquid ("__use_liquid", Float) = 0
+        _LiquidTiling ("Liquid Tiling", Float) = 10
+        _LiquidScroll1 ("Liquid Scroll 1", Vector) = (0.05,0.03,0,0)
+        _LiquidScroll2 ("Liquid Scroll 2", Vector) = (-0.04,0.06,0,0)
+        _LiquidWaveHeight ("Liquid Wave Height", Range(0,2)) = 0.5
+        _LiquidSmoothness ("Liquid Smoothness", Range(0,1)) = 0.95
+        _LiquidFresnelPower ("Liquid Fresnel Power", Range(0.5,8)) = 4
+        _LiquidFresnelStrength ("Liquid Fresnel Strength", Range(0,2)) = 0.5
     }
 
     SubShader
@@ -32,6 +60,38 @@ Shader "Custom/CustomObjectLit"
             "RenderType"="Opaque"
             "Queue"="Geometry"
         }
+
+        HLSLINCLUDE
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            CBUFFER_START(UnityPerMaterial)
+                float4 _BaseMap_ST;
+                float4 _BaseColor;
+                float4 _EmissionColor;
+                float _Smoothness;
+                float _Metallic;
+                float _Cutoff;
+                float4 _OverlayColor;
+                float4 _OverlayDirection;
+                float _OverlayTiling;
+                float _OverlayIntensity;
+                float _OverlayAmount;
+                float _OverlaySharpness;
+                float _OverlaySmoothness;
+                float _OverlayNormalBlend;
+                float4 _OverlayFadeAxis;
+                float _OverlayFadeMin;
+                float _OverlayFadeMax;
+                float _OverlayFadeObjectSpace;
+                float4 _LiquidScroll1;
+                float4 _LiquidScroll2;
+                float _LiquidTiling;
+                float _LiquidWaveHeight;
+                float _LiquidSmoothness;
+                float _LiquidFresnelPower;
+                float _LiquidFresnelStrength;
+            CBUFFER_END
+        ENDHLSL
 
         Pass
         {
@@ -62,9 +122,11 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_instancing
 
             #pragma multi_compile_local _ _ALPHATEST_ON
-            #pragma shader_feature_local _RECEIVE_SHADOWS_OFF
+            #pragma multi_compile_local _ _RECEIVE_SHADOWS_OFF
+            #pragma multi_compile_local _ _OVERLAY
+            #pragma multi_compile_local _ _OVERLAY_FADE
+            #pragma multi_compile_local _ _LIQUID
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
             TEXTURE2D(_BaseMap);
@@ -82,14 +144,45 @@ Shader "Custom/CustomObjectLit"
             TEXTURE2D(_EmissionMap);
             SAMPLER(sampler_EmissionMap);
 
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseMap_ST;
-                float4 _BaseColor;
-                float4 _EmissionColor;
-                float _Smoothness;
-                float _Metallic;
-                float _Cutoff;
-            CBUFFER_END
+            TEXTURE2D(_OverlayMap);
+            SAMPLER(sampler_OverlayMap);
+
+            float LiquidHash(float2 p)
+            {
+                float3 p3 = frac(float3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return frac((p3.x + p3.y) * p3.z);
+            }
+
+            float LiquidNoise(float2 p)
+            {
+                float2 i = floor(p);
+                float2 f = frac(p);
+                float2 u = f * f * (3.0 - 2.0 * f);
+                float a = LiquidHash(i);
+                float b = LiquidHash(i + float2(1, 0));
+                float c = LiquidHash(i + float2(0, 1));
+                float d = LiquidHash(i + float2(1, 1));
+                return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+            }
+
+            float LiquidHeight(float2 uv)
+            {
+                float2 uv1 = uv * _LiquidTiling + _Time.y * _LiquidScroll1.xy;
+                float2 uv2 = uv * _LiquidTiling * 1.7 + _Time.y * _LiquidScroll2.xy;
+                return LiquidNoise(uv1) * 0.6 + LiquidNoise(uv2) * 0.4;
+            }
+
+            half3 LiquidNormalTS(float2 uv)
+            {
+                float eps = 0.01;
+                float h0 = LiquidHeight(uv);
+                float hx = LiquidHeight(uv + float2(eps, 0));
+                float hy = LiquidHeight(uv + float2(0, eps));
+                half dx = (half)((h0 - hx) * _LiquidWaveHeight / eps);
+                half dy = (half)((h0 - hy) * _LiquidWaveHeight / eps);
+                return normalize(half3(dx, dy, 1.0));
+            }
 
             struct Attributes
             {
@@ -110,6 +203,7 @@ Shader "Custom/CustomObjectLit"
                 half4  tangentWS  : TEXCOORD3;
 
                 half   fogFactor  : TEXCOORD4;
+                float3 positionOS : TEXCOORD5;
 
                 UNITY_VERTEX_INPUT_INSTANCE_ID
                 UNITY_VERTEX_OUTPUT_STEREO
@@ -128,6 +222,7 @@ Shader "Custom/CustomObjectLit"
 
                 output.positionCS = posInputs.positionCS;
                 output.positionWS = posInputs.positionWS;
+                output.positionOS = input.positionOS.xyz;
 
                 output.normalWS  = normInputs.normalWS;
                 output.tangentWS = half4(normInputs.tangentWS, input.tangentOS.w);
@@ -146,10 +241,19 @@ Shader "Custom/CustomObjectLit"
 
                 half4 baseSample = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
 
-                half metallicSample = SAMPLE_TEXTURE2D(_MetallicMap, sampler_MetallicMap, input.uv).x;
-                half smoothnessSample = 1.0 - SAMPLE_TEXTURE2D(_RoughnessMap, sampler_RoughnessMap, input.uv).x;
-                half4 normalSample = SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, input.uv);
-                half3 normalTS = UnpackNormal(normalSample);
+                half metallicSample;
+                half smoothnessSample;
+                half3 normalTS;
+
+                #if defined(_LIQUID)
+                    metallicSample   = 0.0h;
+                    smoothnessSample = _LiquidSmoothness;
+                    normalTS         = LiquidNormalTS(input.uv);
+                #else
+                    metallicSample   = saturate(SAMPLE_TEXTURE2D(_MetallicMap, sampler_MetallicMap, input.uv).x + _Metallic);
+                    smoothnessSample = saturate(1.0 - SAMPLE_TEXTURE2D(_RoughnessMap, sampler_RoughnessMap, input.uv).x + _Smoothness);
+                    normalTS         = UnpackNormal(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, input.uv));
+                #endif
 
                 #if defined(_ALPHATEST_ON)
                     clip(baseSample.a - _Cutoff);
@@ -164,33 +268,55 @@ Shader "Custom/CustomObjectLit"
                 half3 finalNormalWS = normalize(mul(normalTS, TBN));
                 finalNormalWS *= (facing > 0) ? 1.0 : -1.0;
 
+                #if defined(_OVERLAY)
+                    half3 overlayDir = normalize(_OverlayDirection.xyz);
+                    half overlayDot = dot(finalNormalWS, overlayDir);
+                    half overlayFactor = smoothstep(_OverlayAmount - _OverlaySharpness, _OverlayAmount + _OverlaySharpness, overlayDot);
+                    overlayFactor *= _OverlayIntensity;
+
+                    #if defined(_OVERLAY_FADE)
+                        half3 fadePos = lerp(input.positionWS, input.positionOS, _OverlayFadeObjectSpace);
+                        half fadeProj = dot(fadePos, normalize(_OverlayFadeAxis.xyz));
+                        half fadeT = saturate((fadeProj - _OverlayFadeMin) / (_OverlayFadeMax - _OverlayFadeMin + 0.0001));
+                        half fadeMask = fadeT * fadeT * (3.0 - 2.0 * fadeT);
+                        overlayFactor *= fadeMask;
+                    #endif
+
+                    half3 overlayAlbedo = SAMPLE_TEXTURE2D(_OverlayMap, sampler_OverlayMap, input.uv * _OverlayTiling).rgb * _OverlayColor.rgb;
+
+                    baseSample.rgb   = lerp(baseSample.rgb,   overlayAlbedo,      overlayFactor);
+                    metallicSample   = lerp(metallicSample,   0.0h,               overlayFactor);
+                    smoothnessSample = lerp(smoothnessSample, _OverlaySmoothness, overlayFactor);
+
+                    finalNormalWS = normalize(lerp(finalNormalWS, overlayDir, overlayFactor * _OverlayNormalBlend));
+                #endif
+
                 InputData inputData;
                 ZERO_INITIALIZE(InputData, inputData);
 
                 inputData.positionWS = input.positionWS;
-
-                half3 n = NormalizeNormalPerPixel(input.normalWS);
                 inputData.normalWS = finalNormalWS;
-
                 inputData.viewDirectionWS = GetWorldSpaceNormalizeViewDir(input.positionWS);
                 inputData.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
-
                 inputData.fogCoord = input.fogFactor;
-                inputData.vertexLighting = VertexLighting(input.positionWS, n);
-
-                inputData.bakedGI = SampleSH(n);
+                inputData.vertexLighting = VertexLighting(input.positionWS, normalWS);
+                inputData.bakedGI = SampleSH(normalWS);
 
                 SurfaceData surfaceData;
                 ZERO_INITIALIZE(SurfaceData, surfaceData);
 
-                half3 emissionSample = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, input.uv).rgb;
+                half3 emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, input.uv).rgb * _EmissionColor.rgb;
+                #if defined(_LIQUID)
+                    half liquidFresnel = pow(1.0h - saturate(dot(finalNormalWS, inputData.viewDirectionWS)), _LiquidFresnelPower);
+                    emission += liquidFresnel * _LiquidFresnelStrength;
+                #endif
 
                 surfaceData.albedo = baseSample.rgb;
                 surfaceData.metallic = metallicSample;
                 surfaceData.smoothness = smoothnessSample;
                 surfaceData.normalTS = half3(0,0,1);
                 surfaceData.occlusion = 1.0h;
-                surfaceData.emission = emissionSample * _EmissionColor.rgb;
+                surfaceData.emission = emission;
                 surfaceData.alpha = baseSample.a;
 
                 return UniversalFragmentPBR(inputData, surfaceData);
@@ -216,16 +342,8 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_instancing
             #pragma multi_compile_local _ _ALPHATEST_ON
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseMap_ST;
-                float4 _BaseColor;
-                float _Cutoff;
-            CBUFFER_END
 
             struct Attributes
             {
@@ -290,16 +408,8 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_instancing
             #pragma multi_compile_local _ _ALPHATEST_ON
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseMap_ST;
-                float4 _BaseColor;
-                float _Cutoff;
-            CBUFFER_END
 
             struct Attributes
             {

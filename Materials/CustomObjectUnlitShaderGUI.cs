@@ -30,6 +30,7 @@ namespace Jibbers.MapTools
 
             EditorGUILayout.Space(6);
             editor.TexturePropertySingleLine(new GUIContent("Base Map"), baseMap, baseColor);
+            CustomObjectLitShaderGUI.DrawReadWriteWarning(baseMap);
             editor.TextureScaleOffsetProperty(baseMap);
 
             EditorGUILayout.Space(6);

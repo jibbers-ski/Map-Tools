@@ -1,6 +1,6 @@
 {
     "name": "fun.jibbers.map-tools",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "displayName": "Jibbers Map Tools",
     "description": "Map tooling for Jibbers.",
     "unity": "6000.0",

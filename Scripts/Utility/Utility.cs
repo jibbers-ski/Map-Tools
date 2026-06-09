@@ -7,7 +7,7 @@ namespace Jibbers.MapTools
     public static partial class Utility
     {
 
-        public static readonly string Version = "0.3.2";
+        public static readonly string Version = "0.3.3";
         public static string NewGuid => Guid.NewGuid().ToString();
         public static string DataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "/Jibbers/";
 
