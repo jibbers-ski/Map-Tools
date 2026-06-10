@@ -112,6 +112,7 @@ namespace Jibbers.MapTools
                 Texture2D snowMaskTex = null;
                 if(chunk.snowMaskData != null)
                 {
+                    chunk.snowMaskData.compression = 0;
                     snowMaskTex = chunk.snowMaskData.GetTexture();
                     terrain.materialTemplate.SetTexture("_SnowMask", snowMaskTex);
                     if (terrain.materialTemplate.HasProperty("_UseMasks"))
@@ -200,41 +201,7 @@ namespace Jibbers.MapTools
                             int matCount = part.materials != null ? part.materials.Length : 0;
                             var mats = new Material[matCount];
                             for (int mi = 0; mi < matCount; mi++)
-                            {
-                                var md = part.materials[mi];
-                                string matKey = $"{md.baseTexRef}|{md.metallicTexRef}|{md.roughnessTexRef}|{md.normalTexRef}|{md.emissionTexRef}|{(int) md.renderMode}|{md.alphaCutoff}|{md.tiling}|{md.offset}|{md.cullMode}|{md.baseColor}|{md.emissionColor}|{md.metallic}|{md.smoothness}|{md.lit}|{ExtrasKey(md)}";
-                                if (!matCache.TryGetValue(matKey, out Material mat))
-                                {
-                                    if (md.lit)
-                                        mat = customObjectMaterial != null
-                                            ? new Material(customObjectMaterial)
-                                            : new Material(Shader.Find("Custom/CustomObjectLit"));
-                                    else
-                                        mat = customObjectUnlitMaterial != null
-                                            ? new Material(customObjectUnlitMaterial)
-                                            : new Material(Shader.Find("Custom/CustomObjectUnlit"));
-                                    SetTex(mat, "_BaseMap",        md.baseTexRef,      textures);
-                                    SetTex(mat, "_MetallicMap",    md.metallicTexRef,  textures);
-                                    SetTex(mat, "_RoughnessMap",   md.roughnessTexRef, textures);
-                                    SetTex(mat, "_NormalMap",      md.normalTexRef,    textures);
-                                    SetTex(mat, "_EmissionMap",    md.emissionTexRef,  textures);
-                                    if (mat.HasProperty("_BaseMap"))
-                                    {
-                                        mat.SetTextureScale("_BaseMap",  md.tiling);
-                                        mat.SetTextureOffset("_BaseMap", md.offset);
-                                    }
-                                    if (mat.HasProperty("_Cull"))          mat.SetFloat("_Cull",          md.cullMode);
-                                    if (mat.HasProperty("_BaseColor"))     mat.SetColor("_BaseColor",     md.baseColor);
-                                    if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", md.emissionColor);
-                                    if (mat.HasProperty("_Metallic"))      mat.SetFloat("_Metallic",      md.metallic);
-                                    if (mat.HasProperty("_Smoothness"))    mat.SetFloat("_Smoothness",    md.smoothness);
-                                    ApplyRenderMode(mat, md.renderMode, md.alphaCutoff);
-                                    ApplyExtras(mat, md, textures);
-                                    mat.enableInstancing = true;
-                                    matCache[matKey] = mat;
-                                }
-                                mats[mi] = mat;
-                            }
+                                mats[mi] = GetOrCreateMaterial(part.materials[mi], textures, matCache);
 
                             var partRenderer = partGO.AddComponent<MeshRenderer>();
                             partRenderer.sharedMaterials = mats;
@@ -308,45 +275,17 @@ namespace Jibbers.MapTools
 
                         if (obj.colliders != null) foreach (var cd in obj.colliders)
                         {
-                            string colName = cd.shape switch {
-                                ColliderShape.Box     => "BoxCollider",
-                                ColliderShape.Sphere  => "SphereCollider",
-                                ColliderShape.Capsule => "CapsuleCollider",
-                                ColliderShape.Mesh    => "MeshCollider",
-                                _                     => "Collider",
-                            };
-                            var colGO = new GameObject(colName);
+                            var colGO = new GameObject(ColliderName(cd.shape));
                             colGO.transform.parent = rootGO.transform;
                             colGO.transform.position = cd.localPosition;
                             colGO.transform.rotation = Quaternion.Euler(cd.localRotation);
                             colGO.transform.localScale = cd.localScale;
-
-                            switch (cd.shape)
-                            {
-                                case ColliderShape.Box:
-                                    colGO.AddComponent<BoxCollider>().size = cd.size;
-                                    break;
-                                case ColliderShape.Sphere:
-                                    colGO.AddComponent<SphereCollider>().radius = cd.radius;
-                                    break;
-                                case ColliderShape.Capsule:
-                                    var cap = colGO.AddComponent<CapsuleCollider>();
-                                    cap.radius    = cd.radius;
-                                    cap.height    = cd.height;
-                                    cap.direction = cd.direction;
-                                    break;
-                                case ColliderShape.Mesh:
-                                    if (!string.IsNullOrEmpty(cd.meshRef) && meshes.TryGetValue(cd.meshRef, out var colMesh))
-                                    {
-                                        var mc = colGO.AddComponent<MeshCollider>();
-                                        mc.sharedMesh = colMesh;
-                                        mc.convex = true;
-                                    }
-                                    break;
-                            }
+                            AddColliderComponent(colGO, cd, meshes);
                         }
                     }
                 }
+
+                SpawnTrees(chunk, terrain, terrainGO.transform, meshes, textures, matCache, objPrefabDict);
 
                 chunksList.Add(new MapTerrainChunk {
                     terrain = terrain,
@@ -375,6 +314,41 @@ namespace Jibbers.MapTools
             #if UNITY_EDITOR
             UnityEditor.EditorUtility.SetDirty(exporter);
             #endif
+        }
+
+        static string ColliderName(ColliderShape shape) => shape switch {
+            ColliderShape.Box     => "BoxCollider",
+            ColliderShape.Sphere  => "SphereCollider",
+            ColliderShape.Capsule => "CapsuleCollider",
+            ColliderShape.Mesh    => "MeshCollider",
+            _                     => "Collider",
+        };
+
+        static void AddColliderComponent(GameObject colGO, ColliderData cd, Dictionary<string, Mesh> meshes)
+        {
+            switch (cd.shape)
+            {
+                case ColliderShape.Box:
+                    colGO.AddComponent<BoxCollider>().size = cd.size;
+                    break;
+                case ColliderShape.Sphere:
+                    colGO.AddComponent<SphereCollider>().radius = cd.radius;
+                    break;
+                case ColliderShape.Capsule:
+                    var cap = colGO.AddComponent<CapsuleCollider>();
+                    cap.radius    = cd.radius;
+                    cap.height    = cd.height;
+                    cap.direction = cd.direction;
+                    break;
+                case ColliderShape.Mesh:
+                    if (!string.IsNullOrEmpty(cd.meshRef) && meshes.TryGetValue(cd.meshRef, out var colMesh))
+                    {
+                        var mc = colGO.AddComponent<MeshCollider>();
+                        mc.sharedMesh = colMesh;
+                        mc.convex = true;
+                    }
+                    break;
+            }
         }
 
         static void ApplyRenderMode(Material mat, CustomObjectRenderMode mode, float alphaCutoff)
@@ -432,6 +406,195 @@ namespace Jibbers.MapTools
                 foreach (var kw in md.keywords.OrderBy(x => x, StringComparer.Ordinal))
                     sb.Append(kw).Append(';');
             return sb.ToString();
+        }
+
+        void SpawnTrees(MapTerrainChunkData chunk, Terrain terrain, Transform terrainTransform,
+            Dictionary<string, Mesh> meshes, Dictionary<string, Texture2D> textures,
+            Dictionary<string, Material> matCache, Dictionary<string, Transform> objPrefabDict)
+        {
+            if (chunk.treePrototypes == null || chunk.treePrototypes.Length == 0) return;
+
+            var prototypesContainer = new GameObject("TreePrototypes").transform;
+            prototypesContainer.SetParent(terrainTransform, false);
+            prototypesContainer.gameObject.SetActive(false);
+
+            var protoList = new List<TreePrototype>();
+            var instList  = new List<TreeInstance>();
+            var floatBuf  = new float[6];
+
+            foreach (var protoData in chunk.treePrototypes)
+            {
+                GameObject protoGO;
+                if (!string.IsNullOrEmpty(protoData.objectId))
+                {
+                    if (!objPrefabDict.TryGetValue(protoData.objectId, out var objPrefab))
+                    {
+                        Debug.LogError($"[MapImporter] Unknown tree map object id '{protoData.objectId}', skipping prototype");
+                        continue;
+                    }
+                    protoGO = objPrefab.gameObject;
+                }
+                else
+                    protoGO = BuildTreePrototype(protoData, prototypesContainer, meshes, textures, matCache);
+                if (protoGO == null) continue;
+
+                int protoIndex = protoList.Count;
+                protoList.Add(new TreePrototype { prefab = protoGO });
+
+                int count = protoData.InstanceCount;
+                for (int i = 0; i < count; i++)
+                {
+                    int o = i * TreePrototypeData.InstanceStride;
+                    Buffer.BlockCopy(protoData.instances, o, floatBuf, 0, 24);
+                    instList.Add(new TreeInstance {
+                        position    = new Vector3(floatBuf[0], floatBuf[1], floatBuf[2]),
+                        widthScale  = floatBuf[3],
+                        heightScale = floatBuf[4],
+                        rotation    = floatBuf[5],
+                        color = new Color32(
+                            protoData.instances[o + 24],
+                            protoData.instances[o + 25],
+                            protoData.instances[o + 26],
+                            protoData.instances[o + 27]),
+                        lightmapColor = Color.white,
+                        prototypeIndex = protoIndex,
+                    });
+                }
+            }
+
+            terrain.terrainData.treePrototypes = protoList.ToArray();
+            terrain.terrainData.treeInstances  = instList.ToArray();
+            terrain.Flush();
+        }
+
+        const float TreeCullScreenHeight = 0.01f;
+
+        GameObject BuildTreePrototype(TreePrototypeData protoData, Transform container,
+            Dictionary<string, Mesh> meshes, Dictionary<string, Texture2D> textures, Dictionary<string, Material> matCache)
+        {
+            if (protoData.parts == null || protoData.parts.Length == 0) return null;
+
+            var protoGO = new GameObject("TreePrototype");
+            protoGO.transform.SetParent(container, false);
+
+            var allRenderers   = new List<Renderer>();
+            var renderersByLod = new Dictionary<int, List<Renderer>>();
+            var unassigned     = new List<Renderer>();
+
+            foreach (var part in protoData.parts)
+            {
+                if (string.IsNullOrEmpty(part.meshRef) || !meshes.ContainsKey(part.meshRef)) continue;
+
+                var partGO = new GameObject(part.meshRef);
+                partGO.transform.SetParent(protoGO.transform, false);
+                partGO.transform.localPosition = part.localPosition;
+                partGO.transform.localRotation = Quaternion.Euler(part.localRotation);
+                partGO.transform.localScale    = part.localScale;
+
+                partGO.AddComponent<MeshFilter>().sharedMesh = meshes[part.meshRef];
+
+                int matCount = part.materials != null ? part.materials.Length : 0;
+                var mats = new Material[matCount];
+                for (int mi = 0; mi < matCount; mi++)
+                    mats[mi] = GetOrCreateMaterial(part.materials[mi], textures, matCache);
+
+                var partRenderer = partGO.AddComponent<MeshRenderer>();
+                partRenderer.sharedMaterials = mats;
+                partRenderer.shadowCastingMode = (UnityEngine.Rendering.ShadowCastingMode) part.shadowCastingMode;
+
+                allRenderers.Add(partRenderer);
+                if (part.lodGroupIndex >= 0)
+                {
+                    if (!renderersByLod.TryGetValue(part.lodIndex, out var list))
+                        renderersByLod[part.lodIndex] = list = new List<Renderer>();
+                    list.Add(partRenderer);
+                }
+                else
+                    unassigned.Add(partRenderer);
+            }
+
+            if (allRenderers.Count == 0)
+            {
+                if (Application.isPlaying) Destroy(protoGO);
+                else DestroyImmediate(protoGO);
+                return null;
+            }
+
+            if (protoData.colliders != null) foreach (var cd in protoData.colliders)
+            {
+                var colGO = new GameObject(ColliderName(cd.shape));
+                colGO.transform.SetParent(protoGO.transform, false);
+                colGO.transform.localPosition = cd.localPosition;
+                colGO.transform.localRotation = Quaternion.Euler(cd.localRotation);
+                colGO.transform.localScale    = cd.localScale;
+                AddColliderComponent(colGO, cd, meshes);
+            }
+
+            var lodGroup = protoGO.AddComponent<LODGroup>();
+            var lgd = protoData.lodGroups != null && protoData.lodGroups.Length > 0 ? protoData.lodGroups[0] : null;
+            if (lgd != null && lgd.transitions != null && lgd.transitions.Length > 0)
+            {
+                lodGroup.localReferencePoint = lgd.localReferencePoint;
+                lodGroup.size = lgd.size;
+                lodGroup.fadeMode = (LODFadeMode) lgd.fadeMode;
+                lodGroup.animateCrossFading = lgd.animateCrossFading;
+
+                var lods = new LOD[lgd.transitions.Length];
+                for (int i = 0; i < lods.Length; i++)
+                {
+                    renderersByLod.TryGetValue(i, out var list);
+                    var rs = list ?? new List<Renderer>();
+                    if (i == 0) rs.AddRange(unassigned);
+                    var lod = new LOD(lgd.transitions[i], rs.ToArray());
+                    lod.fadeTransitionWidth = lgd.fadeWidths != null && i < lgd.fadeWidths.Length ? lgd.fadeWidths[i] : 0f;
+                    lods[i] = lod;
+                }
+                lodGroup.SetLODs(lods);
+            }
+            else
+            {
+                lodGroup.SetLODs(new[] { new LOD(TreeCullScreenHeight, allRenderers.ToArray()) });
+                lodGroup.RecalculateBounds();
+            }
+
+            return protoGO;
+        }
+
+        Material GetOrCreateMaterial(CustomMapObjectMaterialData md,
+            Dictionary<string, Texture2D> textures, Dictionary<string, Material> matCache)
+        {
+            string matKey = $"{md.baseTexRef}|{md.metallicTexRef}|{md.roughnessTexRef}|{md.normalTexRef}|{md.emissionTexRef}|{(int) md.renderMode}|{md.alphaCutoff}|{md.tiling}|{md.offset}|{md.cullMode}|{md.baseColor}|{md.emissionColor}|{md.metallic}|{md.smoothness}|{md.lit}|{ExtrasKey(md)}";
+            if (matCache.TryGetValue(matKey, out Material mat))
+                return mat;
+
+            if (md.lit)
+                mat = customObjectMaterial != null
+                    ? new Material(customObjectMaterial)
+                    : new Material(Shader.Find("Custom/CustomObjectLit"));
+            else
+                mat = customObjectUnlitMaterial != null
+                    ? new Material(customObjectUnlitMaterial)
+                    : new Material(Shader.Find("Custom/CustomObjectUnlit"));
+            SetTex(mat, "_BaseMap",      md.baseTexRef,      textures);
+            SetTex(mat, "_MetallicMap",  md.metallicTexRef,  textures);
+            SetTex(mat, "_RoughnessMap", md.roughnessTexRef, textures);
+            SetTex(mat, "_NormalMap",    md.normalTexRef,    textures);
+            SetTex(mat, "_EmissionMap",  md.emissionTexRef,  textures);
+            if (mat.HasProperty("_BaseMap"))
+            {
+                mat.SetTextureScale("_BaseMap",  md.tiling);
+                mat.SetTextureOffset("_BaseMap", md.offset);
+            }
+            if (mat.HasProperty("_Cull"))          mat.SetFloat("_Cull",          md.cullMode);
+            if (mat.HasProperty("_BaseColor"))     mat.SetColor("_BaseColor",     md.baseColor);
+            if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", md.emissionColor);
+            if (mat.HasProperty("_Metallic"))      mat.SetFloat("_Metallic",      md.metallic);
+            if (mat.HasProperty("_Smoothness"))    mat.SetFloat("_Smoothness",    md.smoothness);
+            ApplyRenderMode(mat, md.renderMode, md.alphaCutoff);
+            ApplyExtras(mat, md, textures);
+            mat.enableInstancing = true;
+            matCache[matKey] = mat;
+            return mat;
         }
 
         static void ApplyExtras(Material mat, CustomMapObjectMaterialData md, Dictionary<string, Texture2D> textures)

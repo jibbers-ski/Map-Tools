@@ -152,6 +152,7 @@ MonoBehaviour:
     stringValue: '- Replace this -'
     optionsString: 
   id: sign_piste
+  forceUniformScale: 0
 --- !u!1 &6555354530154333715
 GameObject:
   m_ObjectHideFlags: 0

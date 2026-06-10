@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Threading.Tasks;
 using UnityEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -27,6 +28,9 @@ public class JsonSerializer : ISerializer
     private Stack<JObject> blockStack = new Stack<JObject>();
     private JObject CurrentObject => blockStack.Count == 0 ? mainObject : blockStack.Peek();
 
+    const int ParallelDecodeMinChars = 512;
+    private Dictionary<string, Task<byte[]>> decodeTasks;
+
     public void Begin(params object[] parameters)
     {
         if (parameters.Length > 0)
@@ -37,6 +41,8 @@ public class JsonSerializer : ISerializer
             try
             {
                 mainObject = JObject.Parse(s);
+                if (!isWriting)
+                    StartParallelDecode();
             }
             catch (JsonException e)
             {
@@ -51,6 +57,40 @@ public class JsonSerializer : ISerializer
     public void Close()
     {
         blockStack.Clear();
+        decodeTasks = null;
+    }
+
+    private void StartParallelDecode()
+    {
+        decodeTasks = new Dictionary<string, Task<byte[]>>();
+        foreach (var token in mainObject.Descendants())
+        {
+            if (token is not JValue jv || jv.Type != JTokenType.String) continue;
+            var str = (string) jv.Value;
+            if (str == null || str.Length < ParallelDecodeMinChars) continue;
+            decodeTasks[jv.Path] = Task.Run(() =>
+            {
+                try { return DecodeBlob(str); }
+                catch { return null; }
+            });
+        }
+        if (decodeTasks.Count == 0)
+            decodeTasks = null;
+    }
+
+    private static byte[] DecodeBlob(string base64)
+    {
+        byte[] bytes = Convert.FromBase64String(base64);
+        // detect gzip magic header
+        if (bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B)
+        {
+            using var input = new MemoryStream(bytes);
+            using var gz = new GZipStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            gz.CopyTo(output);
+            return output.ToArray();
+        }
+        return bytes;
     }
 
     public void EnterBlock(string id)
@@ -175,19 +215,18 @@ public class JsonSerializer : ISerializer
                 if (string.IsNullOrEmpty(base64))
                     return null;
 
+                if (decodeTasks != null
+                    && CurrentObject.TryGetValue(id, out JToken token)
+                    && decodeTasks.TryGetValue(token.Path, out var task))
+                {
+                    var decoded = task.Result;
+                    if (decoded != null)
+                        return decoded;
+                }
+
                 try
                 {
-                    byte[] bytes = Convert.FromBase64String(base64);
-                    // detect gzip magic header
-                    if (bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B)
-                    {
-                        using var input = new MemoryStream(bytes);
-                        using var gz = new GZipStream(input, CompressionMode.Decompress);
-                        using var output = new MemoryStream();
-                        gz.CopyTo(output);
-                        return output.ToArray();
-                    }
-                    return bytes;
+                    return DecodeBlob(base64);
                 }
                 catch (Exception e)
                 {

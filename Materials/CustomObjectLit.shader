@@ -117,7 +117,7 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
             #pragma multi_compile_fragment _ _LIGHT_COOKIES
-            #pragma multi_compile_fragment _ _CLUSTERED_RENDERING
+            #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
 
@@ -301,6 +301,7 @@ Shader "Custom/CustomObjectLit"
                 inputData.fogCoord = input.fogFactor;
                 inputData.vertexLighting = VertexLighting(input.positionWS, normalWS);
                 inputData.bakedGI = SampleSH(normalWS);
+                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
 
                 SurfaceData surfaceData;
                 ZERO_INITIALIZE(SurfaceData, surfaceData);

@@ -118,6 +118,10 @@ namespace Jibbers.MapTools
         public bool enableLogs;
         public bool enableBreakdown;
 
+        static long s_timeMeshPack;
+        static long s_timeTextureEncode;
+        static long s_timeChunkMeta;
+
         void Awake() {
             if(autoExportOnAwake)
                 Export();
@@ -128,6 +132,12 @@ namespace Jibbers.MapTools
 
         public void Export()
         {
+            s_timeMeshPack = 0;
+            s_timeTextureEncode = 0;
+            s_timeChunkMeta = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            long phaseStart = 0;
+
             var spawnPoints = GetComponentsInChildren<MapSpawnPoint>();
             if(string.IsNullOrEmpty(idOverride))
                 idOverride = Utility.NewGuid;
@@ -162,6 +172,8 @@ namespace Jibbers.MapTools
                 }
             }
             if (hasScaleError) return;
+            long validationMs = sw.ElapsedMilliseconds;
+            phaseStart = sw.ElapsedMilliseconds;
 
             var meshLibrary    = new Dictionary<string, MeshData>();
             var textureLibrary = new Dictionary<string, TextureData>();
@@ -170,7 +182,9 @@ namespace Jibbers.MapTools
             for (int i = 0; i < chunks.Count; i++)
             {
                 Log($"Chunk {i}: terrain '{chunks[i].terrain.name}', heightmap {chunks[i].terrain.terrainData.heightmapResolution}");
+                var metaSw = System.Diagnostics.Stopwatch.StartNew();
                 chunkDatas[i] = new MapTerrainChunkData(chunks[i]);
+                s_timeChunkMeta += metaSw.ElapsedMilliseconds;
 
                 var customObjs = new List<CustomMapObjectData>();
                 var found = new HashSet<CustomMapObject>(chunks[i].terrain.GetComponentsInChildren<CustomMapObject>());
@@ -317,6 +331,7 @@ namespace Jibbers.MapTools
                 }
 
                 chunkDatas[i].customObjects = customObjs.Count > 0 ? customObjs.ToArray() : null;
+                ExtractTrees(chunks[i].terrain, chunkDatas[i], meshLibrary, textureLibrary);
             }
 
             Log($"Libraries: {meshLibrary.Count} mesh(es), {textureLibrary.Count} texture(s)");
@@ -324,6 +339,16 @@ namespace Jibbers.MapTools
                 Log($"  Mesh '{kv.Key}': {kv.Value.vertexCount} verts, {kv.Value.triangleCount / 3} tris");
             foreach (var kv in textureLibrary)
                 Log($"  Texture '{kv.Key}': {kv.Value.width}x{kv.Value.height}");
+
+            long extractMs = sw.ElapsedMilliseconds - phaseStart;
+            phaseStart = sw.ElapsedMilliseconds;
+
+            foreach (var td in textureLibrary.Values)
+                td.FinishEncode();
+            foreach (var cd in chunkDatas)
+                cd.snowMaskData?.FinishEncode();
+            long encodeWaitMs = sw.ElapsedMilliseconds - phaseStart;
+            phaseStart = sw.ElapsedMilliseconds;
 
             var map = new MapData() {
                 name = mapName,
@@ -343,20 +368,26 @@ namespace Jibbers.MapTools
             serializer.Begin(true);
             map.Serialize(serializer);
             serializer.Close();
+            string serializedData = (string) serializer.Data;
+            long serializeMs = sw.ElapsedMilliseconds - phaseStart;
+            phaseStart = sw.ElapsedMilliseconds;
 
             var dirPath = Utility.DataPath + "Maps/";
             Directory.CreateDirectory(dirPath);
 
             var filePath = dirPath + map.id + ".jbrmap";
-            File.WriteAllText(filePath, (string) serializer.Data);
+            File.WriteAllText(filePath, serializedData);
+            long writeMs = sw.ElapsedMilliseconds - phaseStart;
             Debug.Log("Saved to: " + filePath);
 
             if (enableBreakdown)
-                LogBreakdown(filePath, chunkDatas, meshLibrary, textureLibrary, spawnPoints.Length);
+                LogBreakdown(filePath, chunkDatas, meshLibrary, textureLibrary, spawnPoints.Length,
+                    validationMs, extractMs, encodeWaitMs, serializeMs, writeMs);
         }
 
         static void LogBreakdown(string filePath, MapTerrainChunkData[] chunks,
-            Dictionary<string, MeshData> meshLib, Dictionary<string, TextureData> texLib, int spawnCount)
+            Dictionary<string, MeshData> meshLib, Dictionary<string, TextureData> texLib, int spawnCount,
+            long validationMs, long extractMs, long encodeWaitMs, long serializeMs, long writeMs)
         {
             long terrainBytes = 0, snowMaskBytes = 0;
             int customObjCount = 0, mapObjCount = 0;
@@ -391,6 +422,7 @@ namespace Jibbers.MapTools
             long rawTotal = terrainBytes + snowMaskBytes + meshTotal + texBytes;
             long fileSize = new FileInfo(filePath).Length;
 
+            long totalMs = validationMs + extractMs + encodeWaitMs + serializeMs + writeMs;
             Debug.Log(
                 $"[MapExporter] Breakdown:\n" +
                 $"  File on disk:       {FmtBytes(fileSize)}\n" +
@@ -407,8 +439,27 @@ namespace Jibbers.MapTools
                 $"    Triangles:        {FmtBytes(meshTris)}\n" +
                 $"  Map objects:        {mapObjCount}\n" +
                 $"  Custom objects:     {customObjCount}\n" +
-                $"  Spawn points:       {spawnCount}"
+                $"  Spawn points:       {spawnCount}\n" +
+                $"  Timing:\n" +
+                $"    Validation:       {FmtTime(validationMs)}\n" +
+                $"    Chunk extract:    {FmtTime(extractMs)}\n" +
+                $"      Chunk meta:     {FmtTime(s_timeChunkMeta)} (heightmap, snow mask, map objects)\n" +
+                $"      Mesh packing:   {FmtTime(s_timeMeshPack)}\n" +
+                $"      Texture capture:{FmtTime(s_timeTextureEncode)} (pixel readback, PNG encode runs in background)\n" +
+                $"    PNG encode wait:  {FmtTime(encodeWaitMs)} (parallel, overlapped with extract)\n" +
+                $"    Serialization:    {FmtTime(serializeMs)} (JSON + gzip + base64)\n" +
+                $"    File write:       {FmtTime(writeMs)}\n" +
+                $"    Total:            {FmtTime(totalMs)}"
             );
+        }
+
+        static string FmtTime(long ms)
+        {
+            if (ms < 1000) return ms + " ms";
+            if (ms < 60_000) return (ms / 1000.0).ToString("F1") + " s";
+            long mins = ms / 60_000;
+            long secs = (ms / 1000) % 60;
+            return mins + "m " + secs.ToString("00") + "s";
         }
 
         static string FmtBytes(long bytes)
@@ -440,7 +491,11 @@ namespace Jibbers.MapTools
 
             string meshKey = GetAssetKey(mesh);
             if (!meshLibrary.ContainsKey(meshKey))
+            {
+                var msw = System.Diagnostics.Stopwatch.StartNew();
                 meshLibrary[meshKey] = new MeshData(mesh);
+                s_timeMeshPack += msw.ElapsedMilliseconds;
+            }
 
             int matCount  = mats != null ? mats.Length : 0;
             int slotCount = Mathf.Max(1, Mathf.Min(mesh.subMeshCount, matCount));
@@ -511,13 +566,161 @@ namespace Jibbers.MapTools
                         if (tex == null) break;
                         string texKey = GetAssetKey(tex);
                         if (!textureLibrary.ContainsKey(texKey))
+                        {
+                            var etsw = System.Diagnostics.Stopwatch.StartNew();
                             textureLibrary[texKey] = new TextureData(tex);
+                            s_timeTextureEncode += etsw.ElapsedMilliseconds;
+                        }
                         extras[name] = new MaterialPropertyData { type = 3, textureRef = texKey };
                         break;
                 }
             }
             md.extraProps = extras.Count > 0 ? extras : null;
             md.keywords = mat.shaderKeywords;
+        }
+
+        static void ExtractTrees(Terrain terrain, MapTerrainChunkData chunkData,
+            Dictionary<string, MeshData> meshLibrary, Dictionary<string, TextureData> textureLibrary)
+        {
+            var tdata = terrain.terrainData;
+            var protos = tdata.treePrototypes;
+            var insts  = tdata.treeInstances;
+            if (protos == null || protos.Length == 0) return;
+
+            var instancesByProto = new List<TreeInstance>[protos.Length];
+            for (int i = 0; i < protos.Length; i++)
+                instancesByProto[i] = new List<TreeInstance>();
+            if (insts != null)
+                foreach (var inst in insts)
+                    if (inst.prototypeIndex >= 0 && inst.prototypeIndex < protos.Length)
+                        instancesByProto[inst.prototypeIndex].Add(inst);
+
+            var protoDataList = new List<TreePrototypeData>();
+            for (int p = 0; p < protos.Length; p++)
+            {
+                var prefab = protos[p].prefab;
+                if (prefab == null || instancesByProto[p].Count == 0) continue;
+                protoDataList.Add(BuildTreePrototype(prefab, instancesByProto[p], meshLibrary, textureLibrary));
+            }
+            chunkData.treePrototypes = protoDataList.Count > 0 ? protoDataList.ToArray() : null;
+        }
+
+        static TreePrototypeData BuildTreePrototype(GameObject prefab, List<TreeInstance> instances,
+            Dictionary<string, MeshData> meshLibrary, Dictionary<string, TextureData> textureLibrary)
+        {
+            var data = new TreePrototypeData();
+            var root = prefab.transform;
+
+            var mapObject = prefab.GetComponent<MapObject>();
+            if (mapObject != null && !string.IsNullOrEmpty(mapObject.id))
+            {
+                data.objectId = mapObject.id;
+                PackTreeInstances(data, instances);
+                return data;
+            }
+
+            var lodGroupsInObj = prefab.GetComponentsInChildren<LODGroup>(true);
+            var rendererLodMap = new Dictionary<Renderer, (int groupIndex, int lodIndex)>();
+            var lodGroupDataList = new List<LODGroupData>();
+            for (int g = 0; g < lodGroupsInObj.Length; g++)
+            {
+                var lg = lodGroupsInObj[g];
+                var lods = lg.GetLODs();
+                var transitions = new float[lods.Length];
+                var fadeWidths  = new float[lods.Length];
+                for (int l = 0; l < lods.Length; l++)
+                {
+                    transitions[l] = lods[l].screenRelativeTransitionHeight;
+                    fadeWidths[l]  = lods[l].fadeTransitionWidth;
+                    if (lods[l].renderers == null) continue;
+                    foreach (var r in lods[l].renderers)
+                        if (r != null)
+                            rendererLodMap[r] = (g, l);
+                }
+                lodGroupDataList.Add(new LODGroupData {
+                    localPosition       = root.InverseTransformPoint(lg.transform.position),
+                    localReferencePoint = lg.localReferencePoint,
+                    size                = lg.size,
+                    transitions         = transitions,
+                    fadeWidths          = fadeWidths,
+                    fadeMode            = (int) lg.fadeMode,
+                    animateCrossFading  = lg.animateCrossFading,
+                });
+            }
+
+            var partsList = new List<CustomMapObjectPartData>();
+            foreach (var mf in prefab.GetComponentsInChildren<MeshFilter>(true))
+            {
+                var mr = mf.GetComponent<MeshRenderer>();
+                var mats = mr != null ? mr.sharedMaterials : null;
+                var part = ExtractPart(mf.sharedMesh, mats, mf.transform, root, meshLibrary, textureLibrary);
+                if (part == null) continue;
+                part.localPosition = root.InverseTransformPoint(mf.transform.position);
+                part.localRotation = (Quaternion.Inverse(root.rotation) * mf.transform.rotation).eulerAngles;
+                var childScale = mf.transform.lossyScale;
+                var rootScale  = root.lossyScale;
+                part.localScale = new Vector3(
+                    rootScale.x != 0f ? childScale.x / rootScale.x : childScale.x,
+                    rootScale.y != 0f ? childScale.y / rootScale.y : childScale.y,
+                    rootScale.z != 0f ? childScale.z / rootScale.z : childScale.z);
+                if (mr != null)
+                {
+                    part.shadowCastingMode = (int) mr.shadowCastingMode;
+                    if (rendererLodMap.TryGetValue(mr, out var lod))
+                    {
+                        part.lodGroupIndex = lod.groupIndex;
+                        part.lodIndex      = lod.lodIndex;
+                    }
+                }
+                partsList.Add(part);
+            }
+
+            data.parts = partsList.ToArray();
+            data.lodGroups = lodGroupDataList.Count > 0 ? lodGroupDataList.ToArray() : null;
+
+            var colliderList = new List<ColliderData>();
+            foreach (var col in prefab.GetComponentsInChildren<Collider>(true))
+            {
+                var cd = ColliderFromUnity(col, root, meshLibrary);
+                if (cd == null) continue;
+                cd.surfaceType   = SurfaceType.Generic;
+                cd.localPosition = root.InverseTransformPoint(cd.localPosition);
+                cd.localRotation = (Quaternion.Inverse(root.rotation) * col.transform.rotation).eulerAngles;
+                var colScale  = col.transform.lossyScale;
+                var rootScale = root.lossyScale;
+                cd.localScale = new Vector3(
+                    rootScale.x != 0f ? colScale.x / rootScale.x : colScale.x,
+                    rootScale.y != 0f ? colScale.y / rootScale.y : colScale.y,
+                    rootScale.z != 0f ? colScale.z / rootScale.z : colScale.z);
+                colliderList.Add(cd);
+            }
+            data.colliders = colliderList.Count > 0 ? colliderList.ToArray() : null;
+
+            PackTreeInstances(data, instances);
+            return data;
+        }
+
+        static void PackTreeInstances(TreePrototypeData data, List<TreeInstance> instances)
+        {
+            var floatBuf = new float[6];
+            data.instances = new byte[instances.Count * TreePrototypeData.InstanceStride];
+            for (int i = 0; i < instances.Count; i++)
+            {
+                int o = i * TreePrototypeData.InstanceStride;
+                var inst = instances[i];
+                floatBuf[0] = inst.position.x;
+                floatBuf[1] = inst.position.y;
+                floatBuf[2] = inst.position.z;
+                floatBuf[3] = inst.widthScale;
+                floatBuf[4] = inst.heightScale;
+                floatBuf[5] = inst.rotation;
+                Buffer.BlockCopy(floatBuf, 0, data.instances, o, 24);
+                Color32 c = inst.color;
+                data.instances[o + 24] = c.r;
+                data.instances[o + 25] = c.g;
+                data.instances[o + 26] = c.b;
+                data.instances[o + 27] = c.a;
+            }
         }
 
         static CustomObjectRenderMode GetRenderMode(Material mat)
@@ -536,7 +739,11 @@ namespace Jibbers.MapTools
 
             string key = GetAssetKey(tex);
             if (!library.ContainsKey(key))
+            {
+                var tsw = System.Diagnostics.Stopwatch.StartNew();
                 library[key] = new TextureData(tex);
+                s_timeTextureEncode += tsw.ElapsedMilliseconds;
+            }
             return key;
         }
 
@@ -546,6 +753,9 @@ namespace Jibbers.MapTools
             string path = UnityEditor.AssetDatabase.GetAssetPath(asset);
             if (string.IsNullOrEmpty(path))
                 return asset.name;
+
+            if (path == "Library/unity default resources" || path == "Resources/unity_builtin_extra")
+                return "builtin/" + asset.name;
 
             if (path.StartsWith("Assets/"))
                 path = path.Substring(7);
@@ -610,7 +820,11 @@ namespace Jibbers.MapTools
                     cd.shape = ColliderShape.Mesh;
                     string key = GetAssetKey(mc.sharedMesh);
                     if (!meshLib.ContainsKey(key))
+                    {
+                        var cmsw = System.Diagnostics.Stopwatch.StartNew();
                         meshLib[key] = new MeshData(mc.sharedMesh);
+                        s_timeMeshPack += cmsw.ElapsedMilliseconds;
+                    }
                     cd.meshRef = key;
                     break;
                 default:

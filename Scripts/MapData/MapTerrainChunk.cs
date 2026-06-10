@@ -32,6 +32,7 @@ namespace Jibbers.MapTools
 
         public MapObjectData[] objects;
         public CustomMapObjectData[] customObjects;
+        public TreePrototypeData[] treePrototypes;
 
         public TextureData snowMaskData;
         public bool snowMask4Channel;
@@ -54,6 +55,8 @@ namespace Jibbers.MapTools
             }
 
             snowMaskData = chunk.snowMask ? new TextureData(chunk.snowMask) : null;
+            if (snowMaskData != null)
+                snowMaskData.compression = 0;
 
             var mat = chunk.terrain.materialTemplate;
             snowMask4Channel = mat != null && mat.HasProperty("_SnowMask4Channel") && mat.GetFloat("_SnowMask4Channel") > 0.5f;
@@ -75,6 +78,7 @@ namespace Jibbers.MapTools
             serializer.SerializeSerializableArray("objects", ref objects, () => new MapObjectData());
 
             serializer.SerializeSerializableArray("custom-objects", ref customObjects, () => new CustomMapObjectData());
+            serializer.SerializeSerializableArray("tree-prototypes", ref treePrototypes, () => new TreePrototypeData());
 
             repeats = serializer.SerializeInt("repeats", repeats);
             repeatOffset = serializer.SerializeVector3("repeat-offset", repeatOffset);
@@ -92,6 +96,32 @@ namespace Jibbers.MapTools
             }
             serializer.ExitBlock();
         }
+
+    }
+
+    public class TreePrototypeData : ISerializable
+    {
+
+        public const int InstanceStride = 28;
+
+        public string objectId;
+        public CustomMapObjectPartData[] parts;
+        public LODGroupData[] lodGroups;
+        public ColliderData[] colliders;
+        public byte[] instances;
+
+        public TreePrototypeData() {}
+
+        public void Serialize(ISerializer serializer)
+        {
+            objectId = serializer.SerializeString("object-id", objectId ?? "");
+            serializer.SerializeSerializableArray("parts", ref parts, () => new CustomMapObjectPartData());
+            serializer.SerializeSerializableArray("lod-groups", ref lodGroups, () => new LODGroupData());
+            serializer.SerializeSerializableArray("colliders", ref colliders, () => new ColliderData());
+            instances = serializer.SerializeBytes("instances", instances);
+        }
+
+        public int InstanceCount => (instances?.Length ?? 0) / InstanceStride;
 
     }
 
