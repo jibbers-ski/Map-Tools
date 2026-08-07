@@ -121,6 +121,19 @@ public class JsonSerializer : ISerializer
             Debug.LogWarning("[JsonSerializer] Tried to exit block at root");
     }
 
+    public bool TryEnterBlock(string id, bool present)
+    {
+        if (isWriting)
+        {
+            if (!present) return false;
+            EnterBlock(id);
+            return true;
+        }
+        if (!TryGet<JObject>(id, out _, ignoreWarnings: true)) return false;
+        EnterBlock(id);
+        return true;
+    }
+
     public bool SerializeBool(string id, bool value = default)
     {
         if (isWriting)
@@ -166,6 +179,30 @@ public class JsonSerializer : ISerializer
         return value;
     }
 
+    public bool SerializeOptionalBool(string id, bool value, bool defaultValue = false)
+    {
+        if (isWriting) { if (value != defaultValue) AddValue(id, value); return value; }
+        return TryGet(id, out bool result) ? result : defaultValue;
+    }
+
+    public float SerializeOptionalFloat(string id, float value, float defaultValue = 0)
+    {
+        if (isWriting) { if (value != defaultValue) AddValue(id, value); return value; }
+        return TryGet(id, out float result) ? result : defaultValue;
+    }
+
+    public int SerializeOptionalInt(string id, int value, int defaultValue = 0)
+    {
+        if (isWriting) { if (value != defaultValue) AddValue(id, value); return value; }
+        return TryGet(id, out int result) ? result : defaultValue;
+    }
+
+    public string SerializeOptionalString(string id, string value, string defaultValue = null)
+    {
+        if (isWriting) { if (value != defaultValue) AddValue(id, value); return value; }
+        return TryGet(id, out string result) ? result : defaultValue;
+    }
+
     public Vector2 SerializeVector2(string id, Vector2 value = default)
     {
         value.x = SerializeFloat(id + "-x", value.x);
@@ -179,6 +216,33 @@ public class JsonSerializer : ISerializer
         value.y = SerializeFloat(id + "-y", value.y);
         value.z = SerializeFloat(id + "-z", value.z);
         return value;
+    }
+
+    public Vector2 SerializeOptionalVector2(string id, Vector2 value, Vector2 defaultValue = default)
+    {
+        if (isWriting) { if (value != defaultValue) SerializeVector2(id, value); return value; }
+        return TryGet(id + "-x", out float _) ? SerializeVector2(id, defaultValue) : defaultValue;
+    }
+
+    public Vector3 SerializeOptionalVector3(string id, Vector3 value, Vector3 defaultValue = default)
+    {
+        if (isWriting) { if (value != defaultValue) SerializeVector3(id, value); return value; }
+        return TryGet(id + "-x", out float _) ? SerializeVector3(id, defaultValue) : defaultValue;
+    }
+
+    public Quaternion SerializeQuaternion(string id, Quaternion value)
+    {
+        value.x = SerializeFloat(id + "-x", value.x);
+        value.y = SerializeFloat(id + "-y", value.y);
+        value.z = SerializeFloat(id + "-z", value.z);
+        value.w = SerializeFloat(id + "-w", value.w);
+        return value;
+    }
+
+    public Quaternion SerializeOptionalQuaternion(string id, Quaternion value, Quaternion defaultValue = default)
+    {
+        if (isWriting) { if (value != defaultValue) SerializeQuaternion(id, value); return value; }
+        return TryGet(id + "-x", out float _) ? SerializeQuaternion(id, defaultValue) : defaultValue;
     }
 
     public byte[] SerializeBytes(string id, byte[] data)

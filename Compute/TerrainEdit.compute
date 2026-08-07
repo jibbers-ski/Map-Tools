@@ -32,10 +32,12 @@ int bakedTiltRes;
 float tiltDepth;
 
 // ── Circle params ────────────────────────────────────────────────────────────
-int2  circleCenter;
-float circleRadius;
-float circleHeightOverride; // normalised 0..1, or < 0 = use centre pixel height
-float circleDepth;
+int2   circleCenter;
+float  circleRadius;
+float  circleHeightOverride; // normalised 0..1, or < 0 = use centre pixel height
+float  circleDepth;
+float2 circleTiltSlope;       // (n.x, n.z) / n.y of the tilt-plane normal; (0,0) = flat
+float  circleTiltHeightScale; // pixel-space rise -> normalised height
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 float SampleBakedCurve(float t)
@@ -144,7 +146,8 @@ void Mirror(uint3 id : SV_DispatchThreadID)
 }
 
 // ── Circle kernel ─────────────────────────────────────────────────────────────
-// radialCurve: t=0 is centre, t=1 is edge.  h = baseH + curve(t) * circleDepth
+// radialCurve: t=0 is centre, t=1 is edge, measured IN the tilt plane (footprint
+// contracts along the tilt direction).  h = plane height + curve(t) * circleDepth
 [numthreads(8, 8, 1)]
 void Circle(uint3 id : SV_DispatchThreadID)
 {
@@ -152,16 +155,26 @@ void Circle(uint3 id : SV_DispatchThreadID)
     int y = id.y;
     if (x >= res || y >= res) return;
 
-    float2 p    = float2(x, y);
-    float  dist = length(p - float2(circleCenter.x, circleCenter.y));
+    float2 d    = float2(x, y) - float2(circleCenter.x, circleCenter.y);
+    float  rise = -dot(d, circleTiltSlope);
+    float  dist = sqrt(dot(d, d) + rise * rise);
     if (dist > circleRadius) return;
 
     float baseH = circleHeightOverride < 0 ? Heightmap[circleCenter] : circleHeightOverride;
 
     float t = saturate(dist / circleRadius);
-    float h = baseH + SampleBakedCurve(t) * circleDepth;
+    float h = baseH + rise * circleTiltHeightScale + SampleBakedCurve(t) * circleDepth;
 
-    Heightmap[int2(x, y)] = h;
+    float blend = 1.0;
+    if (edgeBlend > 0)
+    {
+        float u = saturate((1.0 - t) / edgeBlend);
+        u = u * u * (3.0 - 2.0 * u);
+        blend = pow(u, edgeFalloff);
+    }
+
+    float original = Heightmap[int2(x, y)];
+    Heightmap[int2(x, y)] = lerp(original, h, blend);
 }
 
 // ── Mesh stamp params ────────────────────────────────────────────────────────

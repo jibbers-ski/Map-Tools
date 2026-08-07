@@ -21,6 +21,7 @@ namespace Jibbers.MapTools
 
         public bool overrideTime;
         public float dayTime;
+        public float dayTimeHours = -1;
         public float sunAngle;
 
         public Dictionary<string, MeshData> meshLibrary;
@@ -39,6 +40,8 @@ namespace Jibbers.MapTools
 
             overrideTime = serializer.SerializeBool("override-time", overrideTime);
             dayTime = serializer.SerializeFloat("day-time", dayTime);
+            if (serializer.IsReader || dayTimeHours >= 0)
+                dayTimeHours = serializer.SerializeFloat("day-time-hours", dayTimeHours);
             sunAngle = serializer.SerializeFloat("sun-angle", sunAngle);
 
             if(!headerOnly)

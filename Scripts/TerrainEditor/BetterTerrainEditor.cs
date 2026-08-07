@@ -37,7 +37,26 @@ namespace Jibbers.MapTools
         static float _markBrushSize  = 2f;
         static float _markOpacity    = 0.3f;
         static float _markHardness   = 0.1f;
+        static float _powderBrushSize = 10f;
+        static float _powderOpacity   = 1f;
+        static float _powderHardness  = 1f;
+        static float _powderPaintDepth = 1f;   // 0..1 target powder depth the brush deposits
         static int   _paintMarkingIdx;
+        static float _flowBrushSize = 30f;
+        static float _flowOpacity   = 0.5f;
+        static float _flowHardness  = 0.5f;
+        static bool  _flowUseDragDirection = true;
+        static float _flowFixedAngle;
+        static int   _flowSmoothing = 6;
+        static bool  _brushLagEnabled;
+        static float _brushLag = 5f;
+        static bool  _smoothBrush;
+        static int   _paintViewChoice;
+
+#if JIBBERS_MAPTOOLS_INTERNAL
+        static Material pisteTemplate;
+        const string PisteTemplatePrefKey = "Jibbers.BTE.PisteTemplateGUID";
+#endif
         static bool  _lockDirection;
         static float _lockAngle;
         static bool  _stripeBrush;
@@ -48,6 +67,9 @@ namespace Jibbers.MapTools
 
         static Vector3 lockAnchorWorld;
         static bool    hasLockAnchor;
+
+        static Vector3 lazyBrushWorld;
+        static bool    lazyStrokeActive;
 
         const string PaintPrefPrefix = "BetterTerrainEditor.Paint.";
 
@@ -61,6 +83,21 @@ namespace Jibbers.MapTools
             _markBrushSize   = EditorPrefs.GetFloat(PaintPrefPrefix + "MarkBrush",    2f);
             _markOpacity     = EditorPrefs.GetFloat(PaintPrefPrefix + "MarkOpacity",  0.3f);
             _markHardness    = EditorPrefs.GetFloat(PaintPrefPrefix + "MarkHardness", 0.1f);
+            _powderBrushSize = EditorPrefs.GetFloat(PaintPrefPrefix + "PowderBrush",    10f);
+            _powderOpacity   = EditorPrefs.GetFloat(PaintPrefPrefix + "PowderOpacity",  1f);
+            _powderHardness  = EditorPrefs.GetFloat(PaintPrefPrefix + "PowderHardness", 1f);
+            _powderPaintDepth = EditorPrefs.GetFloat(PaintPrefPrefix + "PowderDepth",   1f);
+            _flowBrushSize   = EditorPrefs.GetFloat(PaintPrefPrefix + "FlowBrush",     30f);
+            _flowOpacity     = EditorPrefs.GetFloat(PaintPrefPrefix + "FlowOpacity",   0.5f);
+            _flowHardness    = EditorPrefs.GetFloat(PaintPrefPrefix + "FlowHardness",  0.5f);
+            _flowUseDragDirection = EditorPrefs.GetBool(PaintPrefPrefix + "FlowDragDir", true);
+            _flowFixedAngle  = EditorPrefs.GetFloat(PaintPrefPrefix + "FlowFixedAngle", 0f);
+            if (_flowFixedAngle > 180f) _flowFixedAngle -= 360f;
+            _flowSmoothing   = EditorPrefs.GetInt  (PaintPrefPrefix + "FlowSmoothing", 6);
+            _brushLagEnabled = EditorPrefs.GetBool (PaintPrefPrefix + "BrushLagOn",    false);
+            _brushLag        = EditorPrefs.GetFloat(PaintPrefPrefix + "BrushLag",      5f);
+            _smoothBrush     = EditorPrefs.GetBool (PaintPrefPrefix + "SmoothBrush",   false);
+            _paintViewChoice = EditorPrefs.GetInt  (PaintPrefPrefix + "PaintView",     0);
             _paintMarkingIdx = EditorPrefs.GetInt  (PaintPrefPrefix + "MarkingIdx",   0);
             _lockDirection   = EditorPrefs.GetBool (PaintPrefPrefix + "LockDirection", false);
             _lockAngle       = EditorPrefs.GetFloat(PaintPrefPrefix + "LockAngle",    0f);
@@ -78,6 +115,20 @@ namespace Jibbers.MapTools
             EditorPrefs.SetFloat(PaintPrefPrefix + "MarkBrush",     _markBrushSize);
             EditorPrefs.SetFloat(PaintPrefPrefix + "MarkOpacity",   _markOpacity);
             EditorPrefs.SetFloat(PaintPrefPrefix + "MarkHardness",  _markHardness);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "PowderBrush",    _powderBrushSize);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "PowderOpacity",  _powderOpacity);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "PowderHardness", _powderHardness);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "PowderDepth",    _powderPaintDepth);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "FlowBrush",      _flowBrushSize);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "FlowOpacity",    _flowOpacity);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "FlowHardness",   _flowHardness);
+            EditorPrefs.SetBool (PaintPrefPrefix + "FlowDragDir",    _flowUseDragDirection);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "FlowFixedAngle", _flowFixedAngle);
+            EditorPrefs.SetInt  (PaintPrefPrefix + "FlowSmoothing",  _flowSmoothing);
+            EditorPrefs.SetBool (PaintPrefPrefix + "BrushLagOn",     _brushLagEnabled);
+            EditorPrefs.SetFloat(PaintPrefPrefix + "BrushLag",       _brushLag);
+            EditorPrefs.SetBool (PaintPrefPrefix + "SmoothBrush",    _smoothBrush);
+            EditorPrefs.SetInt  (PaintPrefPrefix + "PaintView",      _paintViewChoice);
             EditorPrefs.SetInt  (PaintPrefPrefix + "MarkingIdx",    _paintMarkingIdx);
             EditorPrefs.SetBool (PaintPrefPrefix + "LockDirection", _lockDirection);
             EditorPrefs.SetFloat(PaintPrefPrefix + "LockAngle",     _lockAngle);
@@ -89,23 +140,71 @@ namespace Jibbers.MapTools
 
         static float paintBrushSize
         {
-            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowBrushSize : _markBrushSize; }
-            set { if (paintMode == 0) _snowBrushSize = value; else _markBrushSize = value; SavePaintPrefs(); }
+            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowBrushSize : paintMode == 2 ? _powderBrushSize : paintMode == 3 ? _flowBrushSize : _markBrushSize; }
+            set { if (paintMode == 0) _snowBrushSize = value; else if (paintMode == 2) _powderBrushSize = value; else if (paintMode == 3) _flowBrushSize = value; else _markBrushSize = value; SavePaintPrefs(); }
         }
         static float paintOpacity
         {
-            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowOpacity : _markOpacity; }
-            set { if (paintMode == 0) _snowOpacity = value; else _markOpacity = value; SavePaintPrefs(); }
+            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowOpacity : paintMode == 2 ? _powderOpacity : paintMode == 3 ? _flowOpacity : _markOpacity; }
+            set { if (paintMode == 0) _snowOpacity = value; else if (paintMode == 2) _powderOpacity = value; else if (paintMode == 3) _flowOpacity = value; else _markOpacity = value; SavePaintPrefs(); }
         }
         static float paintHardness
         {
-            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowHardness : _markHardness; }
-            set { if (paintMode == 0) _snowHardness = value; else _markHardness = value; SavePaintPrefs(); }
+            get { EnsurePaintPrefsLoaded(); return paintMode == 0 ? _snowHardness : paintMode == 2 ? _powderHardness : paintMode == 3 ? _flowHardness : _markHardness; }
+            set { if (paintMode == 0) _snowHardness = value; else if (paintMode == 2) _powderHardness = value; else if (paintMode == 3) _flowHardness = value; else _markHardness = value; SavePaintPrefs(); }
+        }
+
+        static bool smoothBrush
+        {
+            get { EnsurePaintPrefsLoaded(); return _smoothBrush; }
+            set { _smoothBrush = value; SavePaintPrefs(); }
+        }
+
+        static int paintViewChoice
+        {
+            get { EnsurePaintPrefsLoaded(); return _paintViewChoice; }
+            set { _paintViewChoice = value; SavePaintPrefs(); }
+        }
+
+        static readonly string[] paintViewNames = { "Auto (Match Paint Mode)", "Off", "Snow", "Markings", "Powder", "Flow" };
+
+        static float PaintViewTargetValue()
+        {
+            if (paintViewChoice == 1) return 0f;
+            if (paintViewChoice >= 2) return paintViewChoice - 1;
+            return paintMode == 0 ? 1f : paintMode == 1 ? 2f : paintMode == 2 ? 3f : 4f;
+        }
+
+        static void SetPaintView(float value)
+        {
+            var mat = paintEditor != null && paintEditor.terrain != null ? paintEditor.terrain.materialTemplate : null;
+            if (mat != null && mat.HasProperty("_PaintView") && Mathf.Abs(mat.GetFloat("_PaintView") - value) > 0.01f)
+                mat.SetFloat("_PaintView", value);
+        }
+        static float powderPaintDepth
+        {
+            get { EnsurePaintPrefsLoaded(); return _powderPaintDepth; }
+            set { _powderPaintDepth = value; SavePaintPrefs(); }
         }
         static int paintMarkingIdx
         {
             get { EnsurePaintPrefsLoaded(); return _paintMarkingIdx; }
             set { _paintMarkingIdx = value; SavePaintPrefs(); }
+        }
+        static bool flowUseDragDirection
+        {
+            get { EnsurePaintPrefsLoaded(); return _flowUseDragDirection; }
+            set { _flowUseDragDirection = value; SavePaintPrefs(); }
+        }
+        static float flowFixedAngle
+        {
+            get { EnsurePaintPrefsLoaded(); return _flowFixedAngle; }
+            set { _flowFixedAngle = value; SavePaintPrefs(); }
+        }
+        static int flowSmoothing
+        {
+            get { EnsurePaintPrefsLoaded(); return _flowSmoothing; }
+            set { _flowSmoothing = value; SavePaintPrefs(); }
         }
         static bool lockDirection
         {
@@ -137,11 +236,28 @@ namespace Jibbers.MapTools
             get { EnsurePaintPrefsLoaded(); return _stripeSpacing; }
             set { _stripeSpacing = value; SavePaintPrefs(); }
         }
+        static bool brushLagEnabled
+        {
+            get { EnsurePaintPrefsLoaded(); return _brushLagEnabled; }
+            set { _brushLagEnabled = value; SavePaintPrefs(); }
+        }
+        static float brushLag
+        {
+            get { EnsurePaintPrefsLoaded(); return _brushLag; }
+            set { _brushLag = value; SavePaintPrefs(); }
+        }
+        static float ActiveBrushLag => brushLagEnabled ? brushLag : 0f;
 
-        static readonly string[] paintModeNames = { "Snow", "Markings" };
+        static readonly string[] paintModeNames = { "Snow", "Markings", "Powder" };
+        static readonly string[] paintModeNamesWithFlow = { "Snow", "Markings", "Powder", "Flow" };
         static readonly string[] markingColorNames  = { "Red",  "Orange", "Gold", "Yellow", "Yellow-Green", "Lime", "Light Green", "Green", "Teal", "Cyan", "Light Blue", "Blue", "Dark Blue", "Purple", "Pink", "Magenta" };
         static readonly float[]  markingColorValues = { 0.05f,  0.10f,    0.15f,  0.20f,    0.25f,          0.30f,  0.35f,         0.40f,   0.45f,  0.50f,  0.55f,         0.60f,  0.65f,       0.70f,    0.75f,  0.80f     };
         static Texture2D paintTexture;
+        static Texture2D paintTexture2;
+        static float[]   flowPainted;     // session-only: protects hand-painted flow from Re-Smooth
+        static Vector2   lastFlowDir = new Vector2(0f, 1f);
+        static Texture2D _powderCheckedTex;
+        static bool _powderCheckedHasPowder;
         static BetterTerrainEditor paintEditor;
         static float   lastPaintU, lastPaintV;
         static bool    hasLastPaint;
@@ -291,6 +407,8 @@ namespace Jibbers.MapTools
 
             var evt = Event.current;
             bool erase = evt.control;
+            bool sampling = evt.alt && (paintMode == 1 || paintMode == 2
+                || (paintMode == 3 && !flowUseDragDirection && paintTexture2 != null));
 
             var ray = HandleUtility.GUIPointToWorldRay(evt.mousePosition);
             var col = paintEditor.terrain.GetComponent<TerrainCollider>();
@@ -302,13 +420,19 @@ namespace Jibbers.MapTools
 
                 float worldRadius = paintBrushSize * paintEditor.terrain.terrainData.size.x
                     / paintTexture.width;
-                if (erase)
+                if (sampling)
+                    Handles.color = new Color(1f, 0.9f, 0.2f, 0.9f);
+                else if (erase)
                     Handles.color = new Color(1f, 0.3f, 0.3f, 0.6f);
                 else if (paintMode == 1)
                 {
                     Color hc = Color.HSVToRGB(markingColorValues[paintMarkingIdx], 1f, 1f);
                     Handles.color = new Color(hc.r, hc.g, hc.b, 0.6f);
                 }
+                else if (paintMode == 2)
+                    Handles.color = new Color(0.6f, 0.8f, 1f, 0.6f);
+                else if (paintMode == 3)
+                    Handles.color = new Color(1f, 0.6f, 0.1f, 0.6f);
                 else
                     Handles.color = new Color(1f, 1f, 1f, 0.6f);
 
@@ -321,6 +445,34 @@ namespace Jibbers.MapTools
                 else
                 {
                     Handles.DrawWireDisc(cursorPos, hit.normal, worldRadius);
+                }
+
+                if (sampling)
+                {
+                    Handles.BeginGUI();
+                    GUI.Label(new Rect(evt.mousePosition.x + 15f, evt.mousePosition.y - 10f, 160f, 20f),
+                        paintMode == 1 ? "Pick Marking" : paintMode == 2 ? "Pick Powder Depth" : "Pick Flow Angle",
+                        EditorStyles.whiteBoldLabel);
+                    Handles.EndGUI();
+                }
+
+                if (lazyStrokeActive && ActiveBrushLag > 0.001f)
+                {
+                    Vector3 lazyVis = lazyBrushWorld;
+                    lazyVis.y = paintEditor.terrain.SampleHeight(lazyVis) + paintEditor.terrain.transform.position.y;
+                    Handles.DrawWireDisc(lazyVis, Vector3.up, worldRadius * 0.9f);
+                    Handles.DrawDottedLine(lazyVis, cursorPos, 4f);
+                }
+
+                if (paintMode == 3)
+                {
+                    Vector2 previewDir = flowUseDragDirection
+                        ? lastFlowDir
+                        : new Vector2(Mathf.Sin(flowFixedAngle * Mathf.Deg2Rad), Mathf.Cos(flowFixedAngle * Mathf.Deg2Rad));
+                    Vector3 d3 = new Vector3(previewDir.x, 0f, previewDir.y) * worldRadius;
+                    Handles.DrawLine(cursorPos, cursorPos + d3, 2f);
+                    Handles.DrawLine(cursorPos + d3, cursorPos + d3 * 0.7f + Vector3.Cross(d3, Vector3.up).normalized * worldRadius * 0.15f, 2f);
+                    Handles.DrawLine(cursorPos + d3, cursorPos + d3 * 0.7f - Vector3.Cross(d3, Vector3.up).normalized * worldRadius * 0.15f, 2f);
                 }
 
                 if (lockDirection)
@@ -344,9 +496,18 @@ namespace Jibbers.MapTools
                     Handles.DrawLine(lastWorld, cursorPos);
 
                     Vector3 d = cursorPos - lastWorld;
-                    float ang = Mathf.Atan2(d.z, d.x) * Mathf.Rad2Deg;
-                    if (ang < 0)     ang += 180f;
-                    if (ang >= 180f) ang -= 180f;
+                    float ang;
+                    if (paintMode == 3)
+                    {
+                        // Flow convention: signed degrees from +Z, east positive (matches slider + halves).
+                        ang = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
+                    }
+                    else
+                    {
+                        ang = Mathf.Atan2(d.z, d.x) * Mathf.Rad2Deg;
+                        if (ang < 0)     ang += 180f;
+                        if (ang >= 180f) ang -= 180f;
+                    }
                     var labelStyle = new GUIStyle(EditorStyles.boldLabel);
                     labelStyle.normal.textColor = Color.yellow;
                     labelStyle.fontSize = 13;
@@ -354,9 +515,24 @@ namespace Jibbers.MapTools
                 }
             }
 
+            if (sampling && evt.type == EventType.MouseDown && evt.button == 0)
+            {
+                if (col != null && col.Raycast(ray, out RaycastHit sampleHit, 50000f))
+                {
+                    Vector3 sampleLocal = sampleHit.point - paintEditor.terrain.transform.position;
+                    Vector3 sampleSize  = paintEditor.terrain.terrainData.size;
+                    SampleBrushAt(sampleLocal.x / sampleSize.x, sampleLocal.z / sampleSize.z);
+                }
+                evt.Use();
+                return;
+            }
+
             if (evt.type == EventType.MouseDown && evt.button == 0)
             {
-                Undo.RegisterCompleteObjectUndo(paintTexture, paintMode == 0 ? "Paint Snow" : "Paint Marking");
+                if (paintMode == 3 && paintTexture2 != null)
+                    Undo.RegisterCompleteObjectUndo(paintTexture2, "Paint Flow");
+                else
+                    Undo.RegisterCompleteObjectUndo(paintTexture, paintMode == 0 ? "Paint Snow" : paintMode == 2 ? "Paint Powder" : "Paint Marking");
                 if (lockDirection && col != null && col.Raycast(ray, out RaycastHit anchorHit, 50000f))
                 {
                     lockAnchorWorld = anchorHit.point;
@@ -364,10 +540,13 @@ namespace Jibbers.MapTools
                 }
             }
             if (evt.type == EventType.MouseUp && evt.button == 0)
+            {
                 hasLockAnchor = false;
+                lazyStrokeActive = false;
+            }
 
             bool shouldPaint = (evt.type == EventType.MouseDown || evt.type == EventType.MouseDrag)
-                && evt.button == 0;
+                && evt.button == 0 && !evt.alt;
             if (shouldPaint)
             {
                 ray = HandleUtility.GUIPointToWorldRay(evt.mousePosition);
@@ -381,6 +560,60 @@ namespace Jibbers.MapTools
                     Vector3 terrainPos = paintEditor.terrain.transform.position;
                     bool isLine = evt.shift && hasLastPaint && evt.type == EventType.MouseDown;
 
+                    float lag = ActiveBrushLag;
+                    Vector2 lazyMoveDir = Vector2.zero;
+                    bool lazySkip = false;
+                    if (evt.type == EventType.MouseDown)
+                    {
+                        lazyBrushWorld = worldPos;
+                        lazyStrokeActive = true;
+                    }
+                    else if (lag > 0.001f)
+                    {
+                        Vector3 pull = worldPos - lazyBrushWorld;
+                        pull.y = 0f;
+                        float dist = pull.magnitude;
+                        if (dist <= lag)
+                            lazySkip = true;
+                        else
+                        {
+                            Vector3 move = pull * ((dist - lag) / dist);
+                            lazyBrushWorld += move;
+                            worldPos = lazyBrushWorld;
+                            lazyMoveDir = new Vector2(move.x, move.z).normalized;
+                        }
+                    }
+
+                    bool flowSkip = false;
+                    if (paintMode == 3)
+                    {
+                        if (paintTexture2 == null)
+                            flowSkip = true;
+                        else if (smoothBrush)
+                        {
+                        }
+                        else if (!flowUseDragDirection)
+                            lastFlowDir = new Vector2(Mathf.Sin(flowFixedAngle * Mathf.Deg2Rad), Mathf.Cos(flowFixedAngle * Mathf.Deg2Rad));
+                        else
+                        {
+                            if (lag > 0.001f && evt.type == EventType.MouseDrag)
+                            {
+                                if (lazyMoveDir.sqrMagnitude > 0.5f)
+                                    lastFlowDir = lazyMoveDir;
+                            }
+                            else if (hasLastPaint)
+                            {
+                                Vector2 drag = new Vector2(
+                                    worldPos.x - (terrainPos.x + lastPaintU * size.x),
+                                    worldPos.z - (terrainPos.z + lastPaintV * size.z));
+                                if (drag.sqrMagnitude > 1e-4f)
+                                    lastFlowDir = drag.normalized;
+                            }
+                            // Drag-direction strokes start painting on the first drag; the press only anchors.
+                            flowSkip = evt.type == EventType.MouseDown && !isLine;
+                        }
+                    }
+
                     Vector3[] offsets = stripeBrush ? GetStripeOffsetsWorld() : new[] { Vector3.zero };
 
                     Vector3 lastBaseWorld = Vector3.zero;
@@ -392,31 +625,39 @@ namespace Jibbers.MapTools
                             terrainPos.z + lastPaintV * size.z);
                     }
 
-                    foreach (var off in offsets)
+                    if (!flowSkip && !lazySkip)
+                        foreach (var off in offsets)
+                        {
+                            Vector3 stripeWorld = worldPos + off;
+                            Vector3 stripeLocal = stripeWorld - terrainPos;
+                            float u = stripeLocal.x / size.x;
+                            float v = stripeLocal.z / size.z;
+
+                            if (isLine)
+                            {
+                                Vector3 lastStripeWorld = lastBaseWorld + off;
+                                Vector3 lastStripeLocal = lastStripeWorld - terrainPos;
+                                float lu = lastStripeLocal.x / size.x;
+                                float lv = lastStripeLocal.z / size.z;
+                                PaintLine(lu, lv, u, v, erase);
+                            }
+                            else if (paintMode == 3)
+                            {
+                                PaintFlowAt(u, v, lastFlowDir, erase);
+                            }
+                            else
+                            {
+                                PaintAt(u, v, erase);
+                            }
+                        }
+
+                    if (!lazySkip)
                     {
-                        Vector3 stripeWorld = worldPos + off;
-                        Vector3 stripeLocal = stripeWorld - terrainPos;
-                        float u = stripeLocal.x / size.x;
-                        float v = stripeLocal.z / size.z;
-
-                        if (isLine)
-                        {
-                            Vector3 lastStripeWorld = lastBaseWorld + off;
-                            Vector3 lastStripeLocal = lastStripeWorld - terrainPos;
-                            float lu = lastStripeLocal.x / size.x;
-                            float lv = lastStripeLocal.z / size.z;
-                            PaintLine(lu, lv, u, v, erase);
-                        }
-                        else
-                        {
-                            PaintAt(u, v, erase);
-                        }
+                        Vector3 baseLocal = worldPos - terrainPos;
+                        lastPaintU   = baseLocal.x / size.x;
+                        lastPaintV   = baseLocal.z / size.z;
+                        hasLastPaint = true;
                     }
-
-                    Vector3 baseLocal = worldPos - terrainPos;
-                    lastPaintU   = baseLocal.x / size.x;
-                    lastPaintV   = baseLocal.z / size.z;
-                    hasLastPaint = true;
                 }
                 evt.Use();
             }
@@ -463,15 +704,33 @@ namespace Jibbers.MapTools
             float dist = Mathf.Sqrt(dx * dx + dy * dy);
             int steps = Mathf.Max(Mathf.CeilToInt(dist / Mathf.Max(paintBrushSize * 0.3f, 1f)), 1);
 
+            Vector2 lineDir = Vector2.zero;
+            if (paintMode == 3)
+            {
+                Vector3 size = paintEditor.terrain.terrainData.size;
+                lineDir = new Vector2((u1 - u0) * size.x, (v1 - v0) * size.z);
+                if (lineDir.sqrMagnitude > 1e-6f)
+                    lastFlowDir = lineDir.normalized;
+            }
+
             for (int i = 0; i <= steps; i++)
             {
                 float t = (float)i / steps;
-                PaintAt(Mathf.Lerp(u0, u1, t), Mathf.Lerp(v0, v1, t), erase);
+                if (paintMode == 3)
+                    PaintFlowAt(Mathf.Lerp(u0, u1, t), Mathf.Lerp(v0, v1, t), lastFlowDir, erase);
+                else
+                    PaintAt(Mathf.Lerp(u0, u1, t), Mathf.Lerp(v0, v1, t), erase);
             }
         }
 
         static void PaintAt(float u, float v, bool erase)
         {
+            if (paintMode == 2 && smoothBrush)
+            {
+                SmoothPowderAt(u, v);
+                return;
+            }
+
             int texW = paintTexture.width;
             int texH = paintTexture.height;
 
@@ -508,6 +767,11 @@ namespace Jibbers.MapTools
                         float target = erase ? 0f : 1f;
                         c.r = Mathf.Lerp(c.r, target, strength);
                     }
+                    else if (paintMode == 2) // Powder (A channel: 0 = none, 1 = full depth)
+                    {
+                        float target = erase ? 0f : _powderPaintDepth;
+                        c.a = Mathf.Lerp(c.a, target, strength);
+                    }
                     else // Markings (G = color bucket, B = smooth coverage)
                     {
                         if (erase)
@@ -534,7 +798,54 @@ namespace Jibbers.MapTools
 
             var mat = paintEditor.terrain.materialTemplate;
             mat.SetTexture("_SnowMask", paintTexture);
+            if (paintMode == 2)
+            {
+                if (mat.HasProperty("_SnowMask4Channel")) mat.SetFloat("_SnowMask4Channel", 1f);
+                if (mat.HasProperty("_ThirdFromAlpha"))   mat.SetFloat("_ThirdFromAlpha", 1f);
+                _powderCheckedTex = null;
+            }
             paintEditor.terrain.materialTemplate = mat;
+        }
+
+        static void SampleBrushAt(float u, float v)
+        {
+            if (u < 0f || u > 1f || v < 0f || v > 1f) return;
+
+            if (paintMode == 3)
+            {
+                if (paintTexture2 == null) return;
+                int x = Mathf.Clamp(Mathf.RoundToInt(u * paintTexture2.width), 0, paintTexture2.width - 1);
+                int y = Mathf.Clamp(Mathf.RoundToInt((1f - v) * paintTexture2.height), 0, paintTexture2.height - 1);
+                float deg = paintTexture2.GetPixel(x, y).r * 360f;
+                if (deg > 180f) deg -= 360f;
+                flowFixedAngle = deg;
+            }
+            else
+            {
+                int x = Mathf.Clamp(Mathf.RoundToInt(u * paintTexture.width), 0, paintTexture.width - 1);
+                int y = Mathf.Clamp(Mathf.RoundToInt((1f - v) * paintTexture.height), 0, paintTexture.height - 1);
+                Color c = paintTexture.GetPixel(x, y);
+
+                if (paintMode == 2)
+                {
+                    powderPaintDepth = c.a;
+                }
+                else if (paintMode == 1)
+                {
+                    if (c.b > 0.01f)
+                        paintOpacity = Mathf.Clamp(c.b, 0.01f, 1f);
+                    if (c.g > 0.025f)
+                    {
+                        int best = 0;
+                        for (int i = 1; i < markingColorValues.Length; i++)
+                            if (Mathf.Abs(markingColorValues[i] - c.g) < Mathf.Abs(markingColorValues[best] - c.g))
+                                best = i;
+                        paintMarkingIdx = best;
+                    }
+                }
+            }
+
+            InternalEditorUtility.RepaintAllViews();
         }
 
         static Texture2D AcquireSnowMask(BetterTerrainEditor editor)
@@ -572,21 +883,418 @@ namespace Jibbers.MapTools
 
         static void StopPainting()
         {
+            SetPaintView(0f);
             painting     = false;
             paintEditor  = null;
             paintTexture = null;
+            paintTexture2 = null;
+            flowPainted  = null;
+            lazyStrokeActive = false;
             hasLastPaint = false;
+        }
+
+        static Texture2D AcquireSnowMask2(BetterTerrainEditor editor)
+        {
+            var mat = editor.terrain.materialTemplate;
+            if (mat == null || !mat.HasProperty("_SnowMask2"))
+                return null;
+            var tex = mat.GetTexture("_SnowMask2") as Texture2D;
+            if (tex == null)
+                return null;
+            if (!tex.isReadable)
+            {
+                Debug.LogError($"[BetterTerrainEditor] SnowMask2 '{tex.name}' is not readable — enable Read/Write in its import settings. Flow painting disabled.");
+                return null;
+            }
+            return tex;
+        }
+
+        static float EncodeFlowAngle(Vector2 dir)
+        {
+            float a = Mathf.Atan2(dir.x, dir.y);
+            if (a < 0f) a += Mathf.PI * 2f;
+            return a / (Mathf.PI * 2f);
+        }
+
+        static Vector2 DecodeFlowAngle(float encoded)
+        {
+            float a = encoded * Mathf.PI * 2f;
+            return new Vector2(Mathf.Sin(a), Mathf.Cos(a));
+        }
+
+        // Shortest-arc angular blend — vector lerp is degenerate for near-opposite directions
+        // (fresh masks are all angle 0, so half of all paintable directions used to hit that).
+        static Vector2 RotateTowards(Vector2 from, Vector2 to, float t)
+        {
+            float a0 = Mathf.Atan2(from.x, from.y) * Mathf.Rad2Deg;
+            float a1 = Mathf.Atan2(to.x, to.y) * Mathf.Rad2Deg;
+            float a = (a0 + Mathf.DeltaAngle(a0, a1) * t) * Mathf.Deg2Rad;
+            return new Vector2(Mathf.Sin(a), Mathf.Cos(a));
+        }
+
+        static void PaintFlowAt(float u, float v, Vector2 dir, bool erase)
+        {
+            if (paintTexture2 == null) return;
+            if (smoothBrush)
+            {
+                SmoothFlowAt(u, v);
+                return;
+            }
+
+            int texW = paintTexture2.width;
+            int texH = paintTexture2.height;
+            if (flowPainted == null || flowPainted.Length != texW * texH)
+                flowPainted = new float[texW * texH];
+
+            int cx = Mathf.RoundToInt(u * texW);
+            int cy = Mathf.RoundToInt((1f - v) * texH);
+            int r  = Mathf.CeilToInt(paintBrushSize);
+
+            int x0 = Mathf.Max(cx - r, 0);
+            int x1 = Mathf.Min(cx + r, texW - 1);
+            int y0 = Mathf.Max(cy - r, 0);
+            int y1 = Mathf.Min(cy + r, texH - 1);
+            if (x0 > x1 || y0 > y1) return;
+
+            var pixels = paintTexture2.GetPixels(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+            int w = x1 - x0 + 1;
+
+            Vector2 target = erase || dir.sqrMagnitude < 1e-6f ? new Vector2(0f, 1f) : dir.normalized;
+
+            for (int py = y0; py <= y1; py++)
+            {
+                for (int px = x0; px <= x1; px++)
+                {
+                    float dx = px - cx;
+                    float dy = py - cy;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    if (dist > r) continue;
+
+                    float t = dist / r;
+                    float falloff = Mathf.Clamp01((1f - t) / (1f - paintHardness + 0.001f));
+                    float strength = falloff * paintOpacity;
+
+                    int idx = (py - y0) * w + (px - x0);
+                    Color c = pixels[idx];
+                    c.r = EncodeFlowAngle(RotateTowards(DecodeFlowAngle(c.r), target, strength));
+                    pixels[idx] = c;
+                    int gi = py * texW + px;
+                    flowPainted[gi] = erase ? 0f : Mathf.Max(flowPainted[gi], strength);
+                }
+            }
+
+            paintTexture2.SetPixels(x0, y0, w, y1 - y0 + 1, pixels);
+            paintTexture2.Apply();
+
+            var mat = paintEditor.terrain.materialTemplate;
+            mat.SetTexture("_SnowMask2", paintTexture2);
+            ApplyFlowFlags(mat);
+            paintEditor.terrain.materialTemplate = mat;
+        }
+
+        static int SmoothKernel(int brushR) => Mathf.Clamp(brushR / 6, 1, 12);
+
+        // Separable box blur with edge-clamped windows via row/column prefix sums.
+        static float[] BoxBlur(float[] src, int w, int h, int k)
+        {
+            var tmp = new float[src.Length];
+            var prefixRow = new float[w + 1];
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w;
+                for (int x = 0; x < w; x++) prefixRow[x + 1] = prefixRow[x] + src[row + x];
+                for (int x = 0; x < w; x++)
+                {
+                    int a = Mathf.Max(0, x - k), b = Mathf.Min(w - 1, x + k);
+                    tmp[row + x] = (prefixRow[b + 1] - prefixRow[a]) / (b - a + 1);
+                }
+            }
+            var dst = new float[src.Length];
+            var prefixCol = new float[h + 1];
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++) prefixCol[y + 1] = prefixCol[y] + tmp[y * w + x];
+                for (int y = 0; y < h; y++)
+                {
+                    int a = Mathf.Max(0, y - k), b = Mathf.Min(h - 1, y + k);
+                    dst[y * w + x] = (prefixCol[b + 1] - prefixCol[a]) / (b - a + 1);
+                }
+            }
+            return dst;
+        }
+
+        static void SmoothPowderAt(float u, float v)
+        {
+            int texW = paintTexture.width;
+            int texH = paintTexture.height;
+
+            int cx = Mathf.RoundToInt(u * texW);
+            int cy = Mathf.RoundToInt((1f - v) * texH);
+            int r  = Mathf.CeilToInt(paintBrushSize);
+            int k  = SmoothKernel(r);
+
+            int x0 = Mathf.Max(cx - r - k, 0);
+            int x1 = Mathf.Min(cx + r + k, texW - 1);
+            int y0 = Mathf.Max(cy - r - k, 0);
+            int y1 = Mathf.Min(cy + r + k, texH - 1);
+            if (x0 > x1 || y0 > y1) return;
+            int w = x1 - x0 + 1, h = y1 - y0 + 1;
+
+            var pixels = paintTexture.GetPixels(x0, y0, w, h);
+            var alpha = new float[w * h];
+            for (int i = 0; i < alpha.Length; i++) alpha[i] = pixels[i].a;
+            var blurred = BoxBlur(alpha, w, h, k);
+
+            for (int py = Mathf.Max(cy - r, y0); py <= Mathf.Min(cy + r, y1); py++)
+            {
+                for (int px = Mathf.Max(cx - r, x0); px <= Mathf.Min(cx + r, x1); px++)
+                {
+                    float dx = px - cx;
+                    float dy = py - cy;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    if (dist > r) continue;
+
+                    float t = dist / r;
+                    float falloff = Mathf.Clamp01((1f - t) / (1f - paintHardness + 0.001f));
+                    float strength = falloff * paintOpacity;
+
+                    int idx = (py - y0) * w + (px - x0);
+                    Color c = pixels[idx];
+                    c.a = Mathf.Lerp(c.a, blurred[idx], strength);
+                    pixels[idx] = c;
+                }
+            }
+
+            paintTexture.SetPixels(x0, y0, w, h, pixels);
+            paintTexture.Apply();
+
+            var mat = paintEditor.terrain.materialTemplate;
+            mat.SetTexture("_SnowMask", paintTexture);
+            paintEditor.terrain.materialTemplate = mat;
+            _powderCheckedTex = null;
+        }
+
+        static void SmoothFlowAt(float u, float v)
+        {
+            if (paintTexture2 == null) return;
+
+            int texW = paintTexture2.width;
+            int texH = paintTexture2.height;
+            if (flowPainted == null || flowPainted.Length != texW * texH)
+                flowPainted = new float[texW * texH];
+
+            int cx = Mathf.RoundToInt(u * texW);
+            int cy = Mathf.RoundToInt((1f - v) * texH);
+            int r  = Mathf.CeilToInt(paintBrushSize);
+            int k  = SmoothKernel(r);
+
+            int x0 = Mathf.Max(cx - r - k, 0);
+            int x1 = Mathf.Min(cx + r + k, texW - 1);
+            int y0 = Mathf.Max(cy - r - k, 0);
+            int y1 = Mathf.Min(cy + r + k, texH - 1);
+            if (x0 > x1 || y0 > y1) return;
+            int w = x1 - x0 + 1, h = y1 - y0 + 1;
+
+            var pixels = paintTexture2.GetPixels(x0, y0, w, h);
+            var vx = new float[w * h];
+            var vy = new float[w * h];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Vector2 d = DecodeFlowAngle(pixels[i].r);
+                vx[i] = d.x;
+                vy[i] = d.y;
+            }
+            var bx = BoxBlur(vx, w, h, k);
+            var by = BoxBlur(vy, w, h, k);
+
+            for (int py = Mathf.Max(cy - r, y0); py <= Mathf.Min(cy + r, y1); py++)
+            {
+                for (int px = Mathf.Max(cx - r, x0); px <= Mathf.Min(cx + r, x1); px++)
+                {
+                    float dx = px - cx;
+                    float dy = py - cy;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    if (dist > r) continue;
+
+                    float t = dist / r;
+                    float falloff = Mathf.Clamp01((1f - t) / (1f - paintHardness + 0.001f));
+                    float strength = falloff * paintOpacity;
+
+                    int idx = (py - y0) * w + (px - x0);
+                    var avg = new Vector2(bx[idx], by[idx]);
+                    if (avg.sqrMagnitude < 1e-6f) continue;
+
+                    Color c = pixels[idx];
+                    c.r = EncodeFlowAngle(RotateTowards(DecodeFlowAngle(c.r), avg.normalized, strength));
+                    pixels[idx] = c;
+                    int gi = py * texW + px;
+                    flowPainted[gi] = Mathf.Max(flowPainted[gi], strength);
+                }
+            }
+
+            paintTexture2.SetPixels(x0, y0, w, h, pixels);
+            paintTexture2.Apply();
+
+            var mat = paintEditor.terrain.materialTemplate;
+            mat.SetTexture("_SnowMask2", paintTexture2);
+            ApplyFlowFlags(mat);
+            paintEditor.terrain.materialTemplate = mat;
+        }
+
+        // Flow primarily aligns the PISTE (base snow) — powder rotation stays a per-material opt-in.
+        static void ApplyFlowFlags(Material mat)
+        {
+            if (mat.HasProperty("_FlowFromMask2"))   mat.SetFloat("_FlowFromMask2", 1f);
+            if (mat.HasProperty("_SnowFlowEnabled")) mat.SetFloat("_SnowFlowEnabled", 1f);
+        }
+
+        // Vector-space 3x3 box smoothing; wrap-safe because it never averages raw angle values.
+        // protect (same layout as field) preserves hand-painted texels by their paint strength.
+        static void SmoothFlowField(Vector2[] field, int w, int h, int passes, float[] protect)
+        {
+            var tmp = new Vector2[field.Length];
+            var src = field;
+            var dst = tmp;
+            for (int p = 0; p < passes; p++)
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        Vector2 sum = Vector2.zero;
+                        for (int dy = -1; dy <= 1; dy++)
+                        {
+                            int ny = Mathf.Clamp(y + dy, 0, h - 1);
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                int nx = Mathf.Clamp(x + dx, 0, w - 1);
+                                sum += src[ny * w + nx];
+                            }
+                        }
+                        Vector2 avg = sum / 9f;
+                        if (avg.sqrMagnitude > 1e-8f) avg.Normalize();
+                        else avg = src[y * w + x];
+                        int i = y * w + x;
+                        float pm = protect != null ? protect[i] : 0f;
+                        dst[i] = Vector2.Lerp(avg, src[i], pm);
+                    }
+                }
+                var swap = src; src = dst; dst = swap;
+            }
+            if (src != field)
+                System.Array.Copy(src, field, field.Length);
+        }
+
+        static Vector2 SampleFlowFieldBilinear(Vector2[] field, int res, float u, float v)
+        {
+            float fx = Mathf.Clamp01(u) * (res - 1);
+            float fy = Mathf.Clamp01(v) * (res - 1);
+            int ix = (int)fx, iy = (int)fy;
+            int ix1 = Mathf.Min(ix + 1, res - 1), iy1 = Mathf.Min(iy + 1, res - 1);
+            float tx = fx - ix, ty = fy - iy;
+            Vector2 a = Vector2.Lerp(field[iy * res + ix],  field[iy * res + ix1],  tx);
+            Vector2 b = Vector2.Lerp(field[iy1 * res + ix], field[iy1 * res + ix1], tx);
+            Vector2 d = Vector2.Lerp(a, b, ty);
+            return d.sqrMagnitude > 1e-8f ? d.normalized : new Vector2(0f, 1f);
+        }
+
+        // Downhill directions computed + smoothed at a fixed working resolution (the legacy tool's
+        // cost/look), then vector-upsampled into the full-res mask. Wipes hand-paint protection.
+        static void AutoGenerateFlow(BetterTerrainEditor editor)
+        {
+            var tex = paintTexture2;
+            if (tex == null || editor == null || editor.terrain == null) return;
+
+            Undo.RegisterCompleteObjectUndo(tex, "Auto Generate Flow");
+
+            var td = editor.terrain.terrainData;
+            var terrainSize = td.size;
+            int W = Mathf.Min(1024, tex.width);
+            var field = new Vector2[W * W];
+            float e = 1f / W;
+            for (int y = 0; y < W; y++)
+            {
+                float v = y / (float)(W - 1);
+                for (int x = 0; x < W; x++)
+                {
+                    float u = x / (float)(W - 1);
+                    float hL = td.GetInterpolatedHeight(Mathf.Clamp01(u - e), v);
+                    float hR = td.GetInterpolatedHeight(Mathf.Clamp01(u + e), v);
+                    float hD = td.GetInterpolatedHeight(u, Mathf.Clamp01(v - e));
+                    float hU = td.GetInterpolatedHeight(u, Mathf.Clamp01(v + e));
+                    // Slopes per WORLD metre (normalized-space gradients skew downhill on non-square terrains).
+                    Vector2 downhill = new Vector2((hL - hR) / terrainSize.x, (hD - hU) / terrainSize.z);
+                    field[y * W + x] = downhill.sqrMagnitude > 1e-16f ? downhill.normalized : new Vector2(0f, 1f);
+                }
+            }
+
+            // Slider is calibrated for the legacy 512 working res; box-blur radius shrinks with texel
+            // size, so scale passes quadratically to keep the same world-space smoothing amount.
+            int scaledPasses = Mathf.RoundToInt(flowSmoothing * (W / 512f) * (W / 512f));
+            SmoothFlowField(field, W, W, scaledPasses, null);
+
+            int tw = tex.width, th = tex.height;
+            var pixels = tex.GetPixels();
+            for (int ty = 0; ty < th; ty++)
+            {
+                float vTerr = 1f - ty / (float)(th - 1);
+                for (int tx = 0; tx < tw; tx++)
+                {
+                    float u = tx / (float)(tw - 1);
+                    int idx = ty * tw + tx;
+                    var c = pixels[idx];
+                    c.r = EncodeFlowAngle(SampleFlowFieldBilinear(field, W, u, vTerr));
+                    pixels[idx] = c;
+                }
+            }
+            tex.SetPixels(pixels);
+            tex.Apply();
+
+            if (flowPainted != null)
+                System.Array.Clear(flowPainted, 0, flowPainted.Length);
+
+            ApplyFlowFlags(editor.terrain.materialTemplate);
+            EditorUtility.SetDirty(tex);
+            SceneView.RepaintAll();
+        }
+
+        static void ReSmoothFlow(BetterTerrainEditor editor)
+        {
+            var tex = paintTexture2;
+            if (tex == null) return;
+
+            Undo.RegisterCompleteObjectUndo(tex, "Re-Smooth Flow");
+
+            int w = tex.width, h = tex.height;
+            var pixels = tex.GetPixels();
+            var field = new Vector2[pixels.Length];
+            for (int i = 0; i < pixels.Length; i++)
+                field[i] = DecodeFlowAngle(pixels[i].r);
+
+            float[] protect = flowPainted != null && flowPainted.Length == field.Length ? flowPainted : null;
+            SmoothFlowField(field, w, h, Mathf.Max(1, flowSmoothing), protect);
+
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                var c = pixels[i];
+                c.r = EncodeFlowAngle(field[i]);
+                pixels[i] = c;
+            }
+            tex.SetPixels(pixels);
+            tex.Apply();
+            EditorUtility.SetDirty(tex);
+            SceneView.RepaintAll();
         }
 
         static void CreateSnowMaskTexture(BetterTerrainEditor editor)
         {
             int resolution = editor.terrain.terrainData.heightmapResolution;
-            var tex = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false);
+            var tex = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false, true);
             tex.name = editor.terrain.name + "_SnowMask";
 
             var pixels = new Color[resolution * resolution];
             for (int i = 0; i < pixels.Length; i++)
-                pixels[i] = new Color(1f, 0f, 0f, 1f);
+                pixels[i] = new Color(1f, 0f, 0f, 0f);
             tex.SetPixels(pixels);
             tex.Apply();
 
@@ -608,22 +1316,100 @@ namespace Jibbers.MapTools
             editor.terrain.materialTemplate = mat;
             EditorUtility.SetDirty(editor.terrain);
 
-            var exporter = editor.GetComponentInParent<MapExporter>();
-            if (exporter != null && exporter.chunks != null)
-            {
-                foreach (var chunk in exporter.chunks)
-                {
-                    if (chunk.terrain == editor.terrain)
-                    {
-                        Undo.RecordObject(exporter, "Assign SnowMask to Chunk");
-                        chunk.snowMask = tex;
-                        EditorUtility.SetDirty(exporter);
-                        break;
-                    }
-                }
-            }
+            AssignMaskToExporterChunk(editor, tex, isMask2: false);
 
             Debug.Log($"[BetterTerrainEditor] Created SnowMask at {assetPath}");
+        }
+
+        static void CreateSnowMask2Texture(BetterTerrainEditor editor)
+        {
+            int resolution = editor.terrain.terrainData.heightmapResolution;
+            // linear:true is LOAD-BEARING — sRGB-flagged data masks get gamma-warped by the GPU
+            // in Linear color space (angles decode nonlinearly; broke flow for half the circle).
+            var tex = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false, true);
+            tex.name = editor.terrain.name + "_SnowMask2";
+
+            var pixels = new Color[resolution * resolution];
+            for (int i = 0; i < pixels.Length; i++)
+                pixels[i] = new Color(0f, 0f, 0f, 0f);
+            tex.SetPixels(pixels);
+            tex.Apply();
+
+            string terrainPath = AssetDatabase.GetAssetPath(editor.terrain.terrainData);
+            string dir = string.IsNullOrEmpty(terrainPath)
+                ? "Assets"
+                : System.IO.Path.GetDirectoryName(terrainPath);
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath(dir + "/" + tex.name + ".asset");
+            AssetDatabase.CreateAsset(tex, assetPath);
+            AssetDatabase.SaveAssets();
+
+            var mat = editor.terrain.materialTemplate;
+            Undo.RecordObject(mat, "Assign SnowMask2");
+            mat.SetTexture("_SnowMask2", tex);
+            ApplyFlowFlags(mat);
+            editor.terrain.materialTemplate = mat;
+            EditorUtility.SetDirty(editor.terrain);
+
+            AssignMask2ToExporterChunk(editor, tex);
+
+            if (painting && paintEditor == editor)
+                paintTexture2 = tex;
+
+            Debug.Log($"[BetterTerrainEditor] Created SnowMask2 at {assetPath}");
+        }
+
+        static bool IsMaskSRGB(Texture2D tex) =>
+            tex != null && UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(tex.graphicsFormat);
+
+        // In-place sRGB→Linear flag fix: identical pixel bytes, same asset + GUID, only the
+        // sampling interpretation changes.
+        static void FixMaskColorSpace(Material mat, string prop)
+        {
+            var tex = mat.GetTexture(prop) as Texture2D;
+            if (tex == null || !tex.isReadable)
+            {
+                Debug.LogError("[BetterTerrainEditor] Mask must exist and be readable to fix its color space.");
+                return;
+            }
+            var pixels = tex.GetPixels();
+            var fixedTex = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, true);
+            fixedTex.name = tex.name;
+            fixedTex.SetPixels(pixels);
+            fixedTex.Apply();
+            Undo.RegisterCompleteObjectUndo(tex, "Fix Mask Color Space");
+            EditorUtility.CopySerialized(fixedTex, tex);
+            UnityEngine.Object.DestroyImmediate(fixedTex);
+            EditorUtility.SetDirty(tex);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[BetterTerrainEditor] '{tex.name}' is now Linear (was sRGB); pixel data unchanged.", tex);
+        }
+
+        static void AssignMask2ToExporterChunk(BetterTerrainEditor editor, Texture2D tex)
+            => AssignMaskToExporterChunk(editor, tex, isMask2: true);
+
+        static void AssignMaskToExporterChunk(BetterTerrainEditor editor, Texture2D tex, bool isMask2)
+        {
+            var exporter = editor.GetComponentInParent<MapExporter>();
+            if (exporter == null)
+            {
+                Debug.LogWarning($"[BetterTerrainEditor] No MapExporter above terrain '{editor.terrain.name}' — the new mask was not registered in any export chunk.", editor.terrain);
+                return;
+            }
+
+            Undo.RecordObject(exporter, "Assign Mask to Chunk");
+            exporter.chunks ??= new List<MapTerrainChunk>();
+            MapTerrainChunk chunk = null;
+            foreach (var c in exporter.chunks)
+                if (c.terrain == editor.terrain) { chunk = c; break; }
+            if (chunk == null)
+            {
+                chunk = new MapTerrainChunk { terrain = editor.terrain };
+                exporter.chunks.Add(chunk);
+                Debug.Log($"[BetterTerrainEditor] Added export chunk for terrain '{editor.terrain.name}'.", exporter);
+            }
+            if (isMask2) chunk.snowMask2 = tex;
+            else chunk.snowMask = tex;
+            EditorUtility.SetDirty(exporter);
         }
 
         static bool IsMask4Channel(BetterTerrainEditor editor)
@@ -642,7 +1428,7 @@ namespace Jibbers.MapTools
 
             var pixels = tex.GetPixels();
             for (int i = 0; i < pixels.Length; i++)
-                pixels[i] = new Color(pixels[i].r, 0f, 0f, 1f);
+                pixels[i] = new Color(pixels[i].r, 0f, 0f, 0f);
             tex.SetPixels(pixels);
             tex.Apply();
 
@@ -652,6 +1438,190 @@ namespace Jibbers.MapTools
             EditorUtility.SetDirty(tex);
             EditorUtility.SetDirty(editor.terrain);
         }
+
+        // Sub-sampled, cached check for any powder in the mask (alpha < 1). Drives the Clear-Powder
+        // button so it only appears when there is powder to clear. Cache is invalidated on paint/clear.
+        static bool MaskHasPowder(Material mat)
+        {
+            var tex = mat != null ? mat.GetTexture("_SnowMask") as Texture2D : null;
+            if (tex == null || !tex.isReadable) return false;
+            if (tex != _powderCheckedTex)
+            {
+                _powderCheckedTex = tex;
+                _powderCheckedHasPowder = false;
+                var px = tex.GetPixels32();
+                for (int i = 0; i < px.Length; i += 32)
+                    if (px[i].a > 5) { _powderCheckedHasPowder = true; break; }
+            }
+            return _powderCheckedHasPowder;
+        }
+
+        // Powder lives in the mask alpha: 0 = no powder, 1 = full depth. This forces the whole channel
+        // to 0 = a clean, no-powder canvas, keeping snow + markings (R/G/B) intact. Old masks were
+        // opaque (alpha 1) — run this on them so they don't read as full powder once powder is enabled.
+        static bool ConvertLegacyMask(BetterTerrainEditor editor)
+        {
+            var mat = editor.terrain != null ? editor.terrain.materialTemplate : null;
+            var tex = mat != null ? mat.GetTexture("_SnowMask") as Texture2D : null;
+            if (tex == null)
+            {
+                Debug.LogError("[BetterTerrainEditor] No _SnowMask texture to convert.");
+                return false;
+            }
+
+            // Imported (Gaea/PNG) masks are often non-readable and/or block-compressed. Masks must be
+            // readable + uncompressed (DXT bleeds channel data), so fix the import settings in place first.
+            var maskPath = AssetDatabase.GetAssetPath(tex);
+            if (!string.IsNullOrEmpty(maskPath) && AssetImporter.GetAtPath(maskPath) is TextureImporter maskImporter)
+            {
+                bool changed = false;
+                if (!maskImporter.isReadable) { maskImporter.isReadable = true; changed = true; }
+                if (maskImporter.textureCompression != TextureImporterCompression.Uncompressed)
+                { maskImporter.textureCompression = TextureImporterCompression.Uncompressed; changed = true; }
+                if (changed)
+                {
+                    maskImporter.SaveAndReimport();
+                    tex = AssetDatabase.LoadAssetAtPath<Texture2D>(maskPath);
+                    mat.SetTexture("_SnowMask", tex);
+                }
+            }
+
+            if (!tex.isReadable)
+            {
+                Debug.LogError($"[BetterTerrainEditor] SnowMask '{tex.name}' must be readable — enable Read/Write in its import settings.");
+                return false;
+            }
+
+            Undo.RegisterCompleteObjectUndo(tex, "Convert Legacy SnowMask");
+
+            var pixels = tex.GetPixels();
+            for (int i = 0; i < pixels.Length; i++)
+                pixels[i] = new Color(pixels[i].r, pixels[i].g, pixels[i].b, 0f);
+            tex.SetPixels(pixels);
+            tex.Apply();
+
+            if (mat.HasProperty("_SnowMask4Channel")) mat.SetFloat("_SnowMask4Channel", 1f);
+            if (mat.HasProperty("_UseMasks"))         mat.SetFloat("_UseMasks", 1f);
+
+            EditorUtility.SetDirty(tex);
+            EditorUtility.SetDirty(editor.terrain);
+            _powderCheckedTex = null;
+            Debug.Log($"[BetterTerrainEditor] Cleared powder on mask '{tex.name}' (kept snow + markings).", tex);
+            return true;
+        }
+
+        static void InvertPowder(BetterTerrainEditor editor)
+        {
+            var mat = editor.terrain != null ? editor.terrain.materialTemplate : null;
+            var tex = mat != null ? mat.GetTexture("_SnowMask") as Texture2D : null;
+            if (tex == null)
+            {
+                Debug.LogError("[BetterTerrainEditor] No _SnowMask texture to invert.");
+                return;
+            }
+            if (!tex.isReadable)
+            {
+                Debug.LogError($"[BetterTerrainEditor] SnowMask '{tex.name}' must be readable — enable Read/Write in its import settings.");
+                return;
+            }
+
+            Undo.RegisterCompleteObjectUndo(tex, "Invert Powder");
+
+            var pixels = tex.GetPixels();
+            for (int i = 0; i < pixels.Length; i++)
+                pixels[i].a = 1f - pixels[i].a;
+            tex.SetPixels(pixels);
+            tex.Apply();
+
+            if (mat.HasProperty("_SnowMask4Channel")) mat.SetFloat("_SnowMask4Channel", 1f);
+            if (mat.HasProperty("_ThirdFromAlpha"))   mat.SetFloat("_ThirdFromAlpha", 1f);
+
+            EditorUtility.SetDirty(tex);
+            EditorUtility.SetDirty(editor.terrain);
+            _powderCheckedTex = null;
+            Debug.Log($"[BetterTerrainEditor] Inverted powder (alpha) channel on mask '{tex.name}'.", tex);
+        }
+
+#if JIBBERS_MAPTOOLS_INTERNAL
+        static void ConvertToPisteSnow(BetterTerrainEditor editor, Material template)
+        {
+            var terrain = editor.terrain;
+            if (terrain == null || template == null) return;
+
+            var current = terrain.materialTemplate;
+            var instance = new Material(template) { name = template.name + " (Instance)" };
+
+            if (current != null)
+            {
+                CarryTexture(current, instance, "_SnowMask");
+                CarryTexture(current, instance, "_SnowMask2");
+                CarryFloat(current, instance, "_SnowMask4Channel");
+                CarryFloat(current, instance, "_UseMasks");
+            }
+
+            // Start powder OFF from every source (the template's Gaea _ThirdMaskTex / flow / alpha):
+            // the converted terrain's powder comes only from painting the mask alpha. Mirrors ApplyThirdLayer.
+            if (instance.HasProperty("_ThirdMaskTex"))     instance.SetTexture("_ThirdMaskTex", Texture2D.blackTexture);
+            if (instance.HasProperty("_ThirdFlowEnabled")) instance.SetFloat("_ThirdFlowEnabled", 0f);
+            if (instance.HasProperty("_SnowFlowEnabled"))  instance.SetFloat("_SnowFlowEnabled", 0f);
+            if (instance.HasProperty("_FlowFromMask2"))    instance.SetFloat("_FlowFromMask2", 0f);
+            if (instance.HasProperty("_ThirdFromAlpha"))   instance.SetFloat("_ThirdFromAlpha", 0f);
+            if (instance.HasProperty("_SnowMask2") && instance.GetTexture("_SnowMask2") != null)
+                ApplyFlowFlags(instance);
+
+            Undo.RecordObject(terrain, "Convert to PisteSnow");
+            terrain.materialTemplate = instance;
+            EditorUtility.SetDirty(terrain);
+            ConvertLegacyMask(editor);   // always start with an empty powder (alpha) channel
+            Debug.Log($"[BetterTerrainEditor] '{terrain.name}' → scene instance of '{template.name}'; carried SnowMask + flags, powder channel cleared.", terrain);
+        }
+
+        static void CarryTexture(Material from, Material to, string prop)
+        {
+            if (from.HasProperty(prop) && to.HasProperty(prop))
+                to.SetTexture(prop, from.GetTexture(prop));
+        }
+
+        static void CarryFloat(Material from, Material to, string prop)
+        {
+            if (from.HasProperty(prop) && to.HasProperty(prop))
+                to.SetFloat(prop, from.GetFloat(prop));
+        }
+
+        static void CarryVector(Material from, Material to, string prop)
+        {
+            if (from.HasProperty(prop) && to.HasProperty(prop))
+                to.SetVector(prop, from.GetVector(prop));
+        }
+
+        // Per-terrain AUTHORED state: the masks and which features are enabled. Everything else
+        // (art textures, tilings, lighting tuning) is template-owned and comes from the template.
+        static readonly string[] authoredTextures = { "_SnowMask", "_SnowMask2", "_ThirdMaskTex" };
+        static readonly string[] authoredFloats =
+        {
+            "_UseMasks", "_SnowMask4Channel", "_ThirdFromAlpha", "_FlowFromMask2",
+            "_SnowFlowEnabled", "_ThirdFlowEnabled", "_ThirdMaskTiling",
+        };
+
+        static void RefreshFromTemplate(BetterTerrainEditor editor, Material template)
+        {
+            var terrain = editor.terrain;
+            if (terrain == null || template == null || terrain.materialTemplate == null) return;
+
+            var current = terrain.materialTemplate;
+            var instance = new Material(template) { name = template.name + " (Instance)" };
+
+            foreach (var prop in authoredTextures)
+                CarryTexture(current, instance, prop);
+            foreach (var prop in authoredFloats)
+                CarryFloat(current, instance, prop);
+
+            Undo.RecordObject(terrain, "Update Material From Template");
+            terrain.materialTemplate = instance;
+            EditorUtility.SetDirty(terrain);
+            Debug.Log($"[BetterTerrainEditor] '{terrain.name}' material refreshed from template '{template.name}' — masks + feature flags preserved, all other values now match the template.", terrain);
+        }
+#endif
 
         static bool IsAssetlessTerrainData(BetterTerrainEditor editor) =>
             editor.terrain != null
@@ -883,6 +1853,46 @@ namespace Jibbers.MapTools
             if (GUILayout.Button("Hide All Previews")) SetAllPreviews(editor, false);
             EditorGUILayout.EndHorizontal();
 
+#if JIBBERS_MAPTOOLS_INTERNAL
+            if (editor.terrain != null)
+            {
+                EditorGUILayout.Space(8);
+                EditorGUILayout.LabelField("Internal", EditorStyles.boldLabel);
+
+                if (pisteTemplate == null)
+                {
+                    var guid = EditorPrefs.GetString(PisteTemplatePrefKey, "");
+                    if (!string.IsNullOrEmpty(guid))
+                        pisteTemplate = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(guid));
+                }
+
+                EditorGUI.BeginChangeCheck();
+                pisteTemplate = (Material) EditorGUILayout.ObjectField("PisteSnow Template", pisteTemplate, typeof(Material), false);
+                if (EditorGUI.EndChangeCheck())
+                    EditorPrefs.SetString(PisteTemplatePrefKey,
+                        pisteTemplate != null ? AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(pisteTemplate)) : "");
+
+                EditorGUI.BeginDisabledGroup(pisteTemplate == null);
+                var currentMat = editor.terrain.materialTemplate;
+                bool sameShader = pisteTemplate != null && currentMat != null && currentMat.shader == pisteTemplate.shader;
+                if (sameShader)
+                {
+                    if (GUILayout.Button(new GUIContent("Update Material From Template",
+                        "New scene instance with the template's current values. Keeps this terrain's authored data: masks (SnowMask/SnowMask2/legacy powder+flow maps) and feature flags. Does NOT touch the powder alpha channel.")))
+                        RefreshFromTemplate(editor, pisteTemplate);
+                }
+                else
+                {
+                    if (GUILayout.Button(new GUIContent("Convert to PisteSnow",
+                        "Replaces this terrain's material with a scene instance of the template; carries SnowMask + flags, starts powder OFF and clears the powder (alpha) channel.")))
+                        ConvertToPisteSnow(editor, pisteTemplate);
+                }
+                EditorGUI.EndDisabledGroup();
+                if (pisteTemplate == null)
+                    EditorGUILayout.HelpBox("Assign a Custom/PisteSnow template material. Same-shader terrains get 'Update From Template' (refresh values, keep authored masks); other materials get 'Convert to PisteSnow'.", MessageType.Info);
+            }
+#endif
+
             if (editor.terrain != null && editor.terrain.materialTemplate != null
                 && !editor.terrain.materialTemplate.name.Contains("(Instance)"))
             {
@@ -914,6 +1924,57 @@ namespace Jibbers.MapTools
                     if (GUILayout.Button("Convert SnowMask to 4-Channel"))
                         ConvertSnowMaskTo4Channel(editor);
                 }
+                else if (editor.terrain.materialTemplate.HasProperty("_SnowMask2")
+                    && editor.terrain.materialTemplate.GetTexture("_SnowMask2") == null)
+                {
+                    EditorGUILayout.Space(8);
+                    if (GUILayout.Button(new GUIContent("Create SnowMask2 Texture",
+                        "Adds the secondary mask (R = powder flow direction) and unlocks the Flow paint mode.")))
+                        CreateSnowMask2Texture(editor);
+                }
+            }
+
+            if (editor.terrain != null && editor.terrain.materialTemplate != null)
+            {
+                var fixMat = editor.terrain.materialTemplate;
+                var m2 = fixMat.HasProperty("_SnowMask2") ? fixMat.GetTexture("_SnowMask2") as Texture2D : null;
+                if (IsMaskSRGB(m2))
+                {
+                    EditorGUILayout.Space(8);
+                    EditorGUILayout.HelpBox("SnowMask2 is flagged sRGB — in Linear color space the GPU gamma-warps the angle channel, so flow rotations decode wrong (the broken-half bug). The fix keeps the exact same pixel data.", MessageType.Warning);
+                    if (GUILayout.Button("Fix SnowMask2 Color Space (sRGB → Linear)"))
+                        FixMaskColorSpace(fixMat, "_SnowMask2");
+                }
+                var m1 = fixMat.HasProperty("_SnowMask") ? fixMat.GetTexture("_SnowMask") as Texture2D : null;
+                if (IsMaskSRGB(m1))
+                {
+                    EditorGUILayout.Space(8);
+                    EditorGUILayout.HelpBox("SnowMask is flagged sRGB — marking IDs (G) decode warped in Linear color space. Note: fixing also changes how the painted snow (R) channel reads (brighter coverage) — review the terrain afterwards.", MessageType.Info);
+                    if (GUILayout.Button("Fix SnowMask Color Space (sRGB → Linear)"))
+                        FixMaskColorSpace(fixMat, "_SnowMask");
+                }
+            }
+
+            // Shows only when the mask actually has powder (alpha < 1 somewhere), so it hides once clean.
+            if (editor.terrain != null && editor.terrain.materialTemplate != null
+                && editor.terrain.materialTemplate.HasProperty("_SnowMask")
+                && MaskHasPowder(editor.terrain.materialTemplate))
+            {
+                EditorGUILayout.Space(8);
+                if (GUILayout.Button(new GUIContent("Clear Powder",
+                    "Sets the whole powder (alpha) channel to none, keeping snow + markings.")))
+                    ConvertLegacyMask(editor);
+            }
+
+            if (editor.terrain != null && editor.terrain.materialTemplate != null
+                && editor.terrain.materialTemplate.HasProperty("_SnowMask")
+                && editor.terrain.materialTemplate.GetTexture("_SnowMask") is Texture2D
+                && IsMask4Channel(editor))
+            {
+                EditorGUILayout.Space(8);
+                if (GUILayout.Button(new GUIContent("Invert Powder",
+                    "Inverts the powder (alpha) channel: depth becomes 1 - depth everywhere, keeping snow + markings.")))
+                    InvertPowder(editor);
             }
 
             if (IsAssetlessTerrainData(editor))
@@ -956,6 +2017,8 @@ namespace Jibbers.MapTools
                         painting     = true;
                         paintEditor  = editor;
                         paintTexture = tex;
+                        paintTexture2 = AcquireSnowMask2(editor);
+                        flowPainted  = null;
                         if (SceneView.lastActiveSceneView != null)
                             SceneView.lastActiveSceneView.Focus();
                     }
@@ -963,32 +2026,90 @@ namespace Jibbers.MapTools
                 EditorGUI.EndDisabledGroup();
                 if (!hasMask)
                     EditorGUILayout.HelpBox("Terrain material has no _SnowMask property.", MessageType.Warning);
+
+                var idleMat = editor.terrain != null ? editor.terrain.materialTemplate : null;
+                if (idleMat != null && idleMat.HasProperty("_PaintView") && idleMat.GetFloat("_PaintView") > 0.5f)
+                    idleMat.SetFloat("_PaintView", 0f);
             }
             else
             {
                 EditorGUILayout.HelpBox(
-                    "Painting active — click/drag on terrain in Scene View.\nCtrl = erase, Shift+Click = straight line. Esc to stop.",
+                    "Painting active — click/drag on terrain in Scene View.\nCtrl = erase, Shift+Click = straight line, Alt+Click = pick brush values from terrain. Esc to stop.",
                     MessageType.Info);
                 bool is4ch = IsMask4Channel(paintEditor);
+                bool hasFlowMask = paintTexture2 != null;
                 if (is4ch)
-                    paintMode = EditorGUILayout.Popup("Paint Mode", paintMode, paintModeNames);
+                    paintMode = EditorGUILayout.Popup("Paint Mode", paintMode, hasFlowMask ? paintModeNamesWithFlow : paintModeNames);
                 else
+                    paintMode = 0;
+                if (paintMode == 3 && !hasFlowMask)
                     paintMode = 0;
                 paintBrushSize = EditorGUILayout.Slider("Brush Size", paintBrushSize, 1f, 500f);
                 paintOpacity   = EditorGUILayout.Slider("Opacity",    paintOpacity,   0.01f, 1f);
                 paintHardness  = EditorGUILayout.Slider("Hardness",   paintHardness,  0f, 1f);
+                paintViewChoice = EditorGUILayout.Popup("Highlight View", paintViewChoice, paintViewNames);
+                SetPaintView(PaintViewTargetValue());
                 if (paintMode == 1)
                 {
                     EditorGUILayout.Space(8);
                     paintMarkingIdx = EditorGUILayout.Popup("Marking Color", paintMarkingIdx, markingColorNames);
                 }
+                else if (paintMode == 2)
+                {
+                    powderPaintDepth = EditorGUILayout.Slider("Powder Depth", powderPaintDepth, 0f, 1f);
+                    smoothBrush = EditorGUILayout.Toggle(new GUIContent("Smooth Brush",
+                        "Blurs the powder depth under the brush instead of depositing — evens out hard depth edges."), smoothBrush);
+                    var previewTerrain = paintEditor.terrain;
+                    if (previewTerrain != null && previewTerrain.materialTemplate != null
+                        && previewTerrain.materialTemplate.shader != null
+                        && previewTerrain.materialTemplate.shader.name == "Custom/BasicSnowTerrain"
+                        && (previewTerrain.heightmapPixelError > 1.01f || previewTerrain.heightmapMinimumLODSimplification < 5))
+                    {
+                        EditorGUILayout.HelpBox("The preview shader displaces powder per vertex (no tessellation), so displacement detail is capped by the terrain mesh density.\nSet Pixel Error to 1 and Minimum Detail Limit to 5 while painting powder to see a better preview of the actual height.", MessageType.Info);
+                        if (GUILayout.Button("Set Max Terrain Mesh Detail (Pixel Error 1, Min Detail Limit 5)"))
+                        {
+                            Undo.RecordObject(previewTerrain, "Set Max Terrain Mesh Detail");
+                            previewTerrain.heightmapPixelError = 1f;
+                            previewTerrain.heightmapMinimumLODSimplification = 5;
+                            EditorUtility.SetDirty(previewTerrain);
+                        }
+                    }
+                }
+                else if (paintMode == 3)
+                {
+                    EditorGUILayout.Space(8);
+                    smoothBrush = EditorGUILayout.Toggle(new GUIContent("Smooth Brush",
+                        "Blurs the flow directions under the brush instead of painting a direction."), smoothBrush);
+                    if (!smoothBrush)
+                    {
+                        flowUseDragDirection = EditorGUILayout.Toggle("Use Drag Direction", flowUseDragDirection);
+                        if (!flowUseDragDirection)
+                            flowFixedAngle = EditorGUILayout.Slider("Fixed Angle (°)", flowFixedAngle, -180f, 180f);
+                        else
+                        {
+                            float brushAngle = Mathf.Atan2(lastFlowDir.x, lastFlowDir.y) * Mathf.Rad2Deg;
+                            EditorGUILayout.LabelField("Brush Direction", $"{brushAngle:F0}° (0 = +Z, east positive)");
+                        }
+                    }
+                    EditorGUILayout.Space(4);
+                    flowSmoothing = EditorGUILayout.IntSlider("Smoothing Passes", flowSmoothing, 0, 32);
+                    EditorGUILayout.BeginHorizontal();
+                    if (GUILayout.Button("Auto Generate (Downhill)"))
+                        AutoGenerateFlow(paintEditor);
+                    if (GUILayout.Button("Re-Smooth"))
+                        ReSmoothFlow(paintEditor);
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.HelpBox("Flow aligns the piste surface (texture + grooming grooves) along the painted direction; powder rotation is a per-material opt-in. Ctrl = reset to 0°. Re-Smooth keeps this session's hand-painted strokes.", MessageType.None);
+                }
 
-                EditorGUILayout.Space(12);
+                EditorGUILayout.Space(8);
+                brushLagEnabled = EditorGUILayout.Toggle(new GUIContent("Brush Lag",
+                    "Drags the painted point behind the cursor for smooth strokes and stable flow directions."), brushLagEnabled);
+                if (brushLagEnabled)
+                    brushLag = EditorGUILayout.Slider("Lag Distance (m)", brushLag, 0.5f, 50f);
                 lockDirection = EditorGUILayout.Toggle("Lock Direction", lockDirection);
                 if (lockDirection)
                     lockAngle = EditorGUILayout.Slider("Lock Angle (°)", lockAngle, 0f, 180f);
-
-                EditorGUILayout.Space(12);
                 stripeBrush = EditorGUILayout.Toggle("Stripe Brush", stripeBrush);
                 if (stripeBrush)
                 {
@@ -997,7 +2118,7 @@ namespace Jibbers.MapTools
                     stripeSpacing = EditorGUILayout.Slider   ("Stripe Spacing",   stripeSpacing, 1f, 500f);
                 }
 
-                EditorGUILayout.Space(12);
+                EditorGUILayout.Space(8);
                 if (GUILayout.Button("Stop Painting"))
                     StopPainting();
             }
@@ -1066,12 +2187,18 @@ namespace Jibbers.MapTools
                         if (!string.IsNullOrEmpty(ins.name))
                             Handles.Label(centerWorld, ins.name);
 
+                        Vector2 tiltSlope = ins.TiltSlope;
+
                         ringPts.Clear();
                         for (int i = 0; i <= ringRes; i++)
                         {
                             float angle = (float)i / ringRes * Mathf.PI * 2f;
-                            float rx = centerWorld.x + Mathf.Cos(angle) * radiusWorld;
-                            float rz = centerWorld.z + Mathf.Sin(angle) * radiusWorld;
+                            float ca = Mathf.Cos(angle);
+                            float sa = Mathf.Sin(angle);
+                            float aSlope = ca * tiltSlope.x + sa * tiltSlope.y;
+                            float rr = radiusWorld / Mathf.Sqrt(1f + aSlope * aSlope);
+                            float rx = centerWorld.x + ca * rr;
+                            float rz = centerWorld.z + sa * rr;
                             var   hc = editor.WorldToHeightmapCoord(new Vector3(rx, 0, rz));
                             float ry = editor.HeightmapCoordToWorld(hc.x, hc.y).y;
                             ringPts.Add(new Vector3(rx, ry, rz));
@@ -1092,13 +2219,26 @@ namespace Jibbers.MapTools
                             {
                                 float ax = dir == 0 ? 1 : dir == 1 ? -1 : 0;
                                 float az = dir == 2 ? 1 : dir == 3 ? -1 : 0;
+                                float aSlope = ax * tiltSlope.x + az * tiltSlope.y;
+                                float denom = Mathf.Sqrt(1f + aSlope * aSlope);
                                 var profPts = new List<Vector3>(profRes);
                                 for (int i = 0; i < profRes; i++)
                                 {
                                     float t = (float)i / (profRes - 1);
-                                    float r = t * radiusWorld;
-                                    float h = baseY + ins.radialCurve.Evaluate(t) * ins.depth;
-                                    profPts.Add(new Vector3(centerWorld.x + ax * r, h, centerWorld.z + az * r));
+                                    float r = t * radiusWorld / denom;
+                                    float wx = centerWorld.x + ax * r;
+                                    float wz = centerWorld.z + az * r;
+                                    float h = baseY - aSlope * r + ins.radialCurve.Evaluate(t) * ins.depth;
+                                    if (ins.edgeBlend > 0)
+                                    {
+                                        float u = Mathf.Clamp01((1f - t) / ins.edgeBlend);
+                                        u = u * u * (3f - 2f * u);
+                                        float blend = Mathf.Pow(u, ins.edgeFalloff);
+                                        var hcP = editor.WorldToHeightmapCoord(new Vector3(wx, 0, wz));
+                                        float terrY = editor.HeightmapCoordToWorld(hcP.x, hcP.y).y;
+                                        h = Mathf.Lerp(terrY, h, blend);
+                                    }
+                                    profPts.Add(new Vector3(wx, h, wz));
                                 }
                                 Utility.DrawLineGizmo(profPts, sphereRadius: 0.3f);
                             }
@@ -1280,6 +2420,32 @@ namespace Jibbers.MapTools
         public List<TerrainCopyInsert>   copyInserts;
         public List<TerrainPaintInsert>  paintInserts;
 
+        public void NotifyFloorMoved(float lift)
+        {
+            if (Mathf.Abs(lift) < 0.0001f) return;
+#if UNITY_EDITOR
+            UnityEditor.Undo.RecordObject(this, "Change Terrain Height Range");
+#endif
+            if (curveInserts != null)
+                foreach (var ins in curveInserts)
+                {
+                    if (ins == null) continue;
+                    if (ins.heightOverrides.x >= 0f) ins.heightOverrides.x = Mathf.Max(0f, ins.heightOverrides.x + lift);
+                    if (ins.heightOverrides.y >= 0f) ins.heightOverrides.y = Mathf.Max(0f, ins.heightOverrides.y + lift);
+                }
+            if (circleInserts != null)
+                foreach (var ins in circleInserts)
+                    if (ins != null && ins.heightOverride >= 0f)
+                        ins.heightOverride = Mathf.Max(0f, ins.heightOverride + lift);
+            if (meshInserts != null)
+                foreach (var ins in meshInserts)
+                    if (ins != null && ins.heightOffset >= 0f)
+                        ins.heightOffset = Mathf.Max(0f, ins.heightOffset + lift);
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
         [HideInInspector] public Terrain terrain;
         TerrainData data;
 
@@ -1460,6 +2626,12 @@ namespace Jibbers.MapTools
             return new Vector3(wx, wy, wz);
         }
 
+        public Vector2 GetTerrainNormalXZ(int x, int y)
+        {
+            var n = data.GetInterpolatedNormal((float)x / (resX - 1), (float)y / (resY - 1));
+            return new Vector2(n.x, n.z);
+        }
+
         public float GetHeightAtWorldPos(Vector3 worldPos)
         {
             var uv = WorldToHeightmapCoord(worldPos);
@@ -1574,6 +2746,10 @@ namespace Jibbers.MapTools
             terrainEditShader.SetFloat("circleRadius",           insert.radius);
             terrainEditShader.SetFloat("circleHeightOverride",   normalizedOverride);
             terrainEditShader.SetFloat("circleDepth", insert.depth / data.size.y);
+            terrainEditShader.SetVector("circleTiltSlope", insert.TiltSlope);
+            terrainEditShader.SetFloat("circleTiltHeightScale", data.size.x / (resX - 1) / data.size.y);
+            terrainEditShader.SetFloat("edgeBlend",   insert.edgeBlend);
+            terrainEditShader.SetFloat("edgeFalloff", insert.edgeFalloff);
             terrainEditShader.SetInt("res", resX);
 
             int groups = Mathf.CeilToInt(resX / 8f);
@@ -1786,6 +2962,11 @@ namespace Jibbers.MapTools
                         float t = insert.erase ? 0f : 1f;
                         c.r = Mathf.Lerp(c.r, t, cov);
                     }
+                    else if (insert.target == PaintTarget.Powder)
+                    {
+                        float t = insert.erase ? 0f : insert.powderDepth;
+                        c.a = Mathf.Lerp(c.a, t, cov);
+                    }
                     else
                     {
                         if (insert.erase)
@@ -1806,6 +2987,14 @@ namespace Jibbers.MapTools
             tex.SetPixels(pixels);
             tex.Apply();
             UnityEditor.EditorUtility.SetDirty(tex);
+
+            if (insert.target == PaintTarget.Powder)
+            {
+                UnityEditor.Undo.RecordObject(mat, "Enable Powder Layer");
+                if (mat.HasProperty("_SnowMask4Channel")) mat.SetFloat("_SnowMask4Channel", 1f);
+                if (mat.HasProperty("_ThirdFromAlpha"))    mat.SetFloat("_ThirdFromAlpha", 1f);
+                UnityEditor.EditorUtility.SetDirty(mat);
+            }
 #endif
         }
 
@@ -1865,61 +3054,150 @@ namespace Jibbers.MapTools
 
             float srcPxX = srcData.size.x / (srcRes - 1);
             float srcPxZ = srcData.size.z / (srcRes - 1);
-            float worldW = (sw - 1) * srcPxX;
-            float worldD = (sh - 1) * srcPxZ;
-
             float dstPxX = dstData.size.x / (dstRes - 1);
             float dstPxZ = dstData.size.z / (dstRes - 1);
-            int dw = Mathf.Max(1, Mathf.RoundToInt(worldW / dstPxX) + 1);
-            int dh = Mathf.Max(1, Mathf.RoundToInt(worldD / dstPxZ) + 1);
+            float stepX = dstPxX / srcPxX;
+            float stepZ = dstPxZ / srcPxZ;
 
             int dx0 = Mathf.Clamp(insert.dstStartX, 0, dstRes - 1);
             int dy0 = Mathf.Clamp(insert.dstStartY, 0, dstRes - 1);
-            dw = Mathf.Min(dw, dstRes - dx0);
-            dh = Mathf.Min(dh, dstRes - dy0);
+            int dw = Mathf.Min(Mathf.RoundToInt((sw - 1) / stepX) + 1, dstRes - dx0);
+            int dh = Mathf.Min(Mathf.RoundToInt((sh - 1) / stepZ) + 1, dstRes - dy0);
             if (dw < 1 || dh < 1) return;
 
             float[,] srcHeights = srcData.GetHeights(sx0, sy0, sw, sh);
             float[,] dstHeights = dstData.GetHeights(dx0, dy0, dw, dh);
 
+            float srcBaseY = insert.sourceTerrain.transform.position.y;
+            float dstBaseY = terrain.transform.position.y;
             float srcSizeY = srcData.size.y;
             float dstSizeY = dstData.size.y;
             float ho   = insert.heightOffset;
             float fall = insert.blendFalloff;
+            bool convert = Mathf.Abs(srcSizeY - dstSizeY) > 0.001f
+                || Mathf.Abs(srcBaseY - dstBaseY) > 0.001f
+                || Mathf.Abs(ho) > 0.0001f;
+            bool flushX0 = dx0 <= 0, flushX1 = dx0 + dw >= dstRes;
+            bool flushY0 = dy0 <= 0, flushY1 = dy0 + dh >= dstRes;
 
             for (int y = 0; y < dh; y++)
             {
-                float sy = (dh <= 1) ? 0 : (float) y / (dh - 1) * (sh - 1);
-                int sy0i = Mathf.FloorToInt(sy);
-                int sy1i = Mathf.Min(sy0i + 1, sh - 1);
-                float ty = sy - sy0i;
+                float sy = Mathf.Min(y * stepZ, sh - 1);
+                if (insert.mirrorZ) sy = (sh - 1) - sy;
+                int syi = Mathf.FloorToInt(sy);
+                int syj = Mathf.Min(syi + 1, sh - 1);
+                float ty = sy - syi;
 
                 for (int x = 0; x < dw; x++)
                 {
-                    float sx = (dw <= 1) ? 0 : (float) x / (dw - 1) * (sw - 1);
-                    int sx0i = Mathf.FloorToInt(sx);
-                    int sx1i = Mathf.Min(sx0i + 1, sw - 1);
-                    float tx = sx - sx0i;
+                    float sx = Mathf.Min(x * stepX, sw - 1);
+                    if (insert.mirrorX) sx = (sw - 1) - sx;
+                    int sxi = Mathf.FloorToInt(sx);
+                    int sxj = Mathf.Min(sxi + 1, sw - 1);
+                    float tx = sx - sxi;
 
-                    float h00 = srcHeights[sy0i, sx0i];
-                    float h01 = srcHeights[sy0i, sx1i];
-                    float h10 = srcHeights[sy1i, sx0i];
-                    float h11 = srcHeights[sy1i, sx1i];
-                    float hSrc = Mathf.Lerp(Mathf.Lerp(h00, h01, tx), Mathf.Lerp(h10, h11, tx), ty);
+                    float h = Mathf.Lerp(
+                        Mathf.Lerp(srcHeights[syi, sxi], srcHeights[syi, sxj], tx),
+                        Mathf.Lerp(srcHeights[syj, sxi], srcHeights[syj, sxj], tx), ty);
+                    if (convert)
+                        h = Mathf.Clamp01((srcBaseY + h * srcSizeY + ho - dstBaseY) / dstSizeY);
 
-                    float worldY = hSrc * srcSizeY + ho;
-                    float hDst   = worldY / dstSizeY;
+                    float w = 1f;
+                    if (fall > 0)
+                    {
+                        float uX = (dw <= 1) ? 0.5f : (float) x / (dw - 1);
+                        float uY = (dh <= 1) ? 0.5f : (float) y / (dh - 1);
+                        float edge = Mathf.Min(
+                            Mathf.Min(flushX0 ? 1f : uX, flushX1 ? 1f : 1f - uX),
+                            Mathf.Min(flushY0 ? 1f : uY, flushY1 ? 1f : 1f - uY));
+                        float u = Mathf.Clamp01(edge / fall);
+                        w = u * u * (3f - 2f * u);
+                    }
 
-                    float uX = (dw <= 1) ? 0.5f : (float) x / (dw - 1);
-                    float uY = (dh <= 1) ? 0.5f : (float) y / (dh - 1);
-                    float edge = Mathf.Min(Mathf.Min(uX, 1f - uX), Mathf.Min(uY, 1f - uY));
-                    float w    = fall > 0 ? Mathf.SmoothStep(0, fall, edge) : 1f;
-
-                    dstHeights[y, x] = Mathf.Lerp(dstHeights[y, x], hDst, w);
+                    dstHeights[y, x] = w >= 1f ? h : Mathf.Lerp(dstHeights[y, x], h, w);
                 }
             }
 
             dstData.SetHeights(dx0, dy0, dstHeights);
+
+            Debug.Log($"[BetterTerrainEditor] Copy '{insert.name}': '{insert.sourceTerrain.name}' [{sx0},{sy0} {sw}x{sh}] -> '{terrain.name}' [{dx0},{dy0} {dw}x{dh}]"
+                + (insert.sourceTerrain == terrain ? " — WARNING: source is the target terrain, copying onto itself" : ""));
+
+            if (insert.copySnowmask)
+                CopySnowmaskRect(insert, sx0, sy0, sw, sh, dx0, dy0, dw, dh, srcRes, dstRes);
+        }
+
+        void CopySnowmaskRect(TerrainCopyInsert insert, int sx0, int sy0, int sw, int sh,
+            int dx0, int dy0, int dw, int dh, int srcRes, int dstRes)
+        {
+            var srcMat = insert.sourceTerrain.materialTemplate;
+            var dstMat = terrain.materialTemplate;
+            var srcMask = srcMat != null && srcMat.HasProperty("_SnowMask") ? srcMat.GetTexture("_SnowMask") as Texture2D : null;
+            var dstMask = dstMat != null && dstMat.HasProperty("_SnowMask") ? dstMat.GetTexture("_SnowMask") as Texture2D : null;
+            if (srcMask == null || dstMask == null)
+            {
+                Debug.LogWarning("[BetterTerrainEditor] Copy snowmask skipped — source or destination terrain has no _SnowMask texture.");
+                return;
+            }
+            if (!srcMask.isReadable || !dstMask.isReadable)
+            {
+                Debug.LogWarning("[BetterTerrainEditor] Copy snowmask skipped — enable Read/Write on both snow mask textures.");
+                return;
+            }
+
+#if UNITY_EDITOR
+            UnityEditor.Undo.RegisterCompleteObjectUndo(dstMask, "Build Copy Snowmask: " + insert.name);
+#endif
+
+            int smw = srcMask.width, smh = srcMask.height;
+            int dmw = dstMask.width, dmh = dstMask.height;
+
+            float maskStepX = (terrain.terrainData.size.x / (dstRes - 1)) / (insert.sourceTerrain.terrainData.size.x / (srcRes - 1));
+            float maskStepZ = (terrain.terrainData.size.z / (dstRes - 1)) / (insert.sourceTerrain.terrainData.size.z / (srcRes - 1));
+
+            float u0 = (float) dx0 / (dstRes - 1);
+            float u1 = (float) (dx0 + dw - 1) / (dstRes - 1);
+            float v0 = (float) dy0 / (dstRes - 1);
+            float v1 = (float) (dy0 + dh - 1) / (dstRes - 1);
+
+            int px0 = Mathf.Clamp(Mathf.RoundToInt(u0 * dmw), 0, dmw - 1);
+            int px1 = Mathf.Clamp(Mathf.RoundToInt(u1 * dmw), 0, dmw - 1);
+            int py0 = Mathf.Clamp(Mathf.RoundToInt((1f - v1) * dmh), 0, dmh - 1);
+            int py1 = Mathf.Clamp(Mathf.RoundToInt((1f - v0) * dmh), 0, dmh - 1);
+            if (px1 < px0 || py1 < py0) return;
+
+            int rw = px1 - px0 + 1;
+            int rh = py1 - py0 + 1;
+            var dstPixels = dstMask.GetPixels(px0, py0, rw, rh);
+            var srcPixels = srcMask.GetPixels();
+
+            for (int py = py0; py <= py1; py++)
+            {
+                float v = 1f - (float) py / dmh;
+                float fy = Mathf.Clamp01((v - v0) / Mathf.Max(1e-6f, v1 - v0));
+                float sySample = Mathf.Min(fy * (dh - 1) * maskStepZ, sh - 1);
+                if (insert.mirrorZ) sySample = (sh - 1) - sySample;
+                float sv = (sy0 + sySample) / (srcRes - 1);
+                int spy = Mathf.Clamp(Mathf.RoundToInt((1f - sv) * smh), 0, smh - 1);
+
+                for (int px = px0; px <= px1; px++)
+                {
+                    float u = (float) px / dmw;
+                    float fx = Mathf.Clamp01((u - u0) / Mathf.Max(1e-6f, u1 - u0));
+                    float sxSample = Mathf.Min(fx * (dw - 1) * maskStepX, sw - 1);
+                    if (insert.mirrorX) sxSample = (sw - 1) - sxSample;
+                    float su = (sx0 + sxSample) / (srcRes - 1);
+                    int spx = Mathf.Clamp(Mathf.RoundToInt(su * smw), 0, smw - 1);
+
+                    dstPixels[(py - py0) * rw + (px - px0)] = srcPixels[spy * smw + spx];
+                }
+            }
+
+            dstMask.SetPixels(px0, py0, rw, rh, dstPixels);
+            dstMask.Apply();
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.SetDirty(dstMask);
+#endif
         }
 
         void ReadBackRTData()

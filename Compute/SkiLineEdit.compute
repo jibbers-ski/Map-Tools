@@ -1,0 +1,133 @@
+#pragma kernel CarveLine
+
+struct LineSample
+{
+    float2 pos;
+    float  h;
+    float  halfWidth;
+    float  rollBias;
+    float  cumDist;
+    float2 pad;
+};
+
+RWTexture2D<float> Heightmap;
+StructuredBuffer<LineSample> Samples;
+int   sampleCount;
+int   res;
+int2  regionMin;
+int2  regionSize;
+float totalLength;
+float edgeBlend;
+float edgeFalloff;
+float endBlend;
+float crossSectionDepth;
+float sideFlatten;
+
+StructuredBuffer<float> CrossSection;
+int crossSectionRes;
+
+StructuredBuffer<float> FeatureStrip;
+int featureLatRes;
+
+float SampleCrossSection(float t)
+{
+    float fi = t * (crossSectionRes - 1);
+    int   lo = (int)floor(fi);
+    int   hi = (int)ceil(fi);
+    return lerp(CrossSection[lo], CrossSection[hi], frac(fi));
+}
+
+float SampleFeatureStrip(float s, float crossT)
+{
+    int i0 = clamp((int)s, 0, sampleCount - 1);
+    int i1 = min(i0 + 1, sampleCount - 1);
+    float ft = saturate(s - i0);
+    float lb = crossT * (featureLatRes - 1);
+    int b0 = clamp((int)lb, 0, featureLatRes - 1);
+    int b1 = min(b0 + 1, featureLatRes - 1);
+    float lt = saturate(lb - b0);
+    float v00 = FeatureStrip[i0 * featureLatRes + b0];
+    float v01 = FeatureStrip[i0 * featureLatRes + b1];
+    float v10 = FeatureStrip[i1 * featureLatRes + b0];
+    float v11 = FeatureStrip[i1 * featureLatRes + b1];
+    return lerp(lerp(v00, v01, lt), lerp(v10, v11, lt), ft);
+}
+
+[numthreads(8, 8, 1)]
+void CarveLine(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int2 px = regionMin + int2(id.x, id.y);
+    if (px.x < 0 || px.y < 0 || px.x >= res || px.y >= res) return;
+
+    float2 p = float2(px.x, px.y);
+
+    int stride = max(1, sampleCount / 128);
+    float coarseD2 = 1e30;
+    int   coarseI  = 0;
+    for (int ci = 0; ci < sampleCount; ci += stride)
+    {
+        float2 dp = p - Samples[ci].pos;
+        float  d2 = dot(dp, dp);
+        if (d2 < coarseD2) { coarseD2 = d2; coarseI = ci; }
+    }
+
+    int lo = max(coarseI - stride - 1, 0);
+    int hi = min(coarseI + stride + 1, sampleCount - 1);
+
+    float bestD2 = 1e30;
+    int   bestI  = lo;
+    float bestT  = 0;
+    for (int i = lo; i < hi; i++)
+    {
+        float2 a  = Samples[i].pos;
+        float2 ab = Samples[i + 1].pos - a;
+        float  t  = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-6));
+        float2 dq = p - (a + ab * t);
+        float  d2 = dot(dq, dq);
+        if (d2 < bestD2) { bestD2 = d2; bestI = i; bestT = t; }
+    }
+
+    LineSample s0 = Samples[bestI];
+    LineSample s1 = Samples[bestI + 1];
+
+    float halfWidth = lerp(s0.halfWidth, s1.halfWidth, bestT);
+    float dist = sqrt(bestD2);
+    if (dist > halfWidth) return;
+
+    float2 ab2  = s1.pos - s0.pos;
+    float2 q    = s0.pos + ab2 * bestT;
+    float  side = sign(ab2.x * (p.y - q.y) - ab2.y * (p.x - q.x));
+    float crossT = saturate(0.5 + 0.5 * side * dist / max(halfWidth, 1e-4));
+
+    float centerH  = lerp(s0.h, s1.h, bestT);
+    float crossVal = SampleCrossSection(crossT) * crossSectionDepth;
+    float rollVal  = lerp(s0.rollBias, s1.rollBias, bestT) * (crossT - 0.5);
+
+    float edgeDist = min(crossT, 1.0 - crossT);
+    float sideFade = sideFlatten > 0 ? saturate(edgeDist / sideFlatten) : 1.0;
+    sideFade = sideFade * sideFade * (3.0 - 2.0 * sideFade);
+
+    float featureOff = SampleFeatureStrip(bestI + bestT, crossT);
+    float target = centerH + (crossVal + rollVal) * sideFade + featureOff;
+
+    float blend = 1.0;
+    if (edgeBlend > 0)
+    {
+        float u = saturate(edgeDist / edgeBlend);
+        u = u * u * (3.0 - 2.0 * u);
+        blend = pow(u, edgeFalloff);
+    }
+
+    if (endBlend > 0)
+    {
+        float s    = lerp(s0.cumDist, s1.cumDist, bestT);
+        float endD = min(s, totalLength - s);
+        float u = saturate(endD / endBlend);
+        u = u * u * (3.0 - 2.0 * u);
+        blend *= u;
+    }
+
+    float original = Heightmap[px];
+    Heightmap[px] = lerp(original, target, blend);
+}

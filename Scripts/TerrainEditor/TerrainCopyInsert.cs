@@ -21,6 +21,23 @@ namespace Jibbers.MapTools
 
             var srcTerrainProp = property.FindPropertyRelative("sourceTerrain");
             var srcTerrain = srcTerrainProp.objectReferenceValue as Terrain;
+            var dstTerrain = editor != null ? editor.terrain : null;
+            {
+                var row = Row();
+                if (srcTerrain != null && dstTerrain != null && srcTerrain == dstTerrain)
+                {
+                    var warn = new GUIStyle(EditorStyles.miniBoldLabel);
+                    warn.normal.textColor = new Color(1f, 0.45f, 0.15f);
+                    EditorGUI.LabelField(row, "source = target terrain (copies onto itself!)", warn);
+                }
+                else
+                {
+                    EditorGUI.LabelField(row,
+                        "pastes into: " + (dstTerrain != null ? dstTerrain.name : "?") + " (this component's terrain)",
+                        EditorStyles.miniLabel);
+                }
+            }
+
             int srcMax = srcTerrain != null
                 ? srcTerrain.terrainData.heightmapResolution - 1
                 : 2048;
@@ -45,8 +62,8 @@ namespace Jibbers.MapTools
                 float half = (row.width - 2) / 2f;
                 float savedLW = EditorGUIUtility.labelWidth;
                 EditorGUIUtility.labelWidth = 30f;
-                HalfIntSlider(row, row.x,           half, srcSizeXProp, 1, srcMax, "w");
-                HalfIntSlider(row, row.x + half + 2, half, srcSizeYProp, 1, srcMax, "h");
+                HalfIntSlider(row, row.x,           half, srcSizeXProp, 1, srcMax + 1, "w");
+                HalfIntSlider(row, row.x + half + 2, half, srcSizeYProp, 1, srcMax + 1, "h");
                 EditorGUIUtility.labelWidth = savedLW;
             }
 
@@ -55,10 +72,24 @@ namespace Jibbers.MapTools
                 property.FindPropertyRelative("dstStartX"),
                 property.FindPropertyRelative("dstStartY"));
 
+            {
+                var row = Row(10);
+                float third = row.width / 3f;
+                var mirrorXProp = property.FindPropertyRelative("mirrorX");
+                var mirrorZProp = property.FindPropertyRelative("mirrorZ");
+                EditorGUI.LabelField(new Rect(row.x, row.y, third, row.height), "Mirror", EditorStyles.boldLabel);
+                mirrorXProp.boolValue = EditorGUI.ToggleLeft(
+                    new Rect(row.x + third, row.y, third, row.height), "X", mirrorXProp.boolValue);
+                mirrorZProp.boolValue = EditorGUI.ToggleLeft(
+                    new Rect(row.x + third * 2f, row.y, third, row.height), "Z", mirrorZProp.boolValue);
+            }
+
             EditorGUI.Slider(Row(10), property.FindPropertyRelative("blendFalloff"),
                 0f, 1f, "blendFalloff");
             EditorGUI.PropertyField(Row(), property.FindPropertyRelative("heightOffset"),
                 new GUIContent("heightOffset"));
+            EditorGUI.PropertyField(Row(), property.FindPropertyRelative("copySnowmask"),
+                new GUIContent("copy snowmask"));
 
             DrawApplyButton(
                 editor != null && editor.terrain != null
@@ -74,7 +105,7 @@ namespace Jibbers.MapTools
         {
             float line = EditorGUIUtility.singleLineHeight;
             if (!property.isExpanded) return line;
-            return line + (11 * (line + Spacing)) + 60f;
+            return line + (14 * (line + Spacing)) + 70f;
         }
     }
 #endif
@@ -97,9 +128,15 @@ namespace Jibbers.MapTools
         public int dstStartY;
 
         [Space(20)]
+        public bool mirrorX;
+        public bool mirrorZ;
+
+        [Space(20)]
         [Range(0, 1)]
         public float blendFalloff = 0.2f;
         public float heightOffset = 0;
+
+        public bool copySnowmask;
     }
 
 }

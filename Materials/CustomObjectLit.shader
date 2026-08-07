@@ -50,6 +50,21 @@ Shader "Custom/CustomObjectLit"
         _LiquidSmoothness ("Liquid Smoothness", Range(0,1)) = 0.95
         _LiquidFresnelPower ("Liquid Fresnel Power", Range(0.5,8)) = 4
         _LiquidFresnelStrength ("Liquid Fresnel Strength", Range(0,2)) = 0.5
+
+        [HideInInspector] _UseWindSway ("__use_wind_sway", Float) = 0
+        _WindDirection ("Wind Direction", Vector) = (1,0,0.35,0)
+        _WindStrength ("Wind Strength", Range(0,2)) = 0.15
+        _WindSpeed ("Wind Speed", Range(0,10)) = 1
+        _WindVariation ("Wind Variation", Range(0,1)) = 0.4
+        _WindSwayAxis ("Wind Mask Axis", Vector) = (0,1,0,0)
+        _WindSwayMin ("Wind Mask Min", Float) = 0
+        _WindSwayMax ("Wind Mask Max", Float) = 1
+        _WindMaskExponent ("Wind Mask Exponent", Range(0.25,8)) = 2
+        _WindRadialInfluence ("Wind Radial Influence", Range(0,1)) = 0
+        _WindRadialMin ("Wind Radial Min", Float) = 0
+        _WindRadialMax ("Wind Radial Max", Float) = 1
+        _WindRadialExponent ("Wind Radial Exponent", Range(0.25,8)) = 1
+        _WindCrossSway ("Wind Cross Sway", Range(0,1)) = 0
     }
 
     SubShader
@@ -90,7 +105,51 @@ Shader "Custom/CustomObjectLit"
                 float _LiquidSmoothness;
                 float _LiquidFresnelPower;
                 float _LiquidFresnelStrength;
+                float4 _WindDirection;
+                float4 _WindSwayAxis;
+                float _WindStrength;
+                float _WindSpeed;
+                float _WindVariation;
+                float _WindSwayMin;
+                float _WindSwayMax;
+                float _WindMaskExponent;
+                float _WindRadialInfluence;
+                float _WindRadialMin;
+                float _WindRadialMax;
+                float _WindRadialExponent;
+                float _WindCrossSway;
             CBUFFER_END
+
+            float3 WindSwayOffset(float3 positionWS, float3 positionOS)
+            {
+                float3 windDir = normalize(_WindDirection.xyz + float3(0.0001, 0.0, 0.0));
+
+                float3 axisN = normalize(_WindSwayAxis.xyz + float3(0.0, 0.0001, 0.0));
+                float proj = dot(positionOS, axisN);
+                float axisMask = pow(saturate((proj - _WindSwayMin) / (_WindSwayMax - _WindSwayMin + 0.0001)), _WindMaskExponent);
+
+                float radial = length(positionOS - axisN * proj);
+                float radialMask = pow(saturate((radial - _WindRadialMin) / (_WindRadialMax - _WindRadialMin + 0.0001)), _WindRadialExponent);
+
+                float mask = axisMask * lerp(1.0, radialMask, _WindRadialInfluence);
+
+                float4x4 objectToWorld = GetObjectToWorldMatrix();
+                float3 pivotWS = float3(objectToWorld._m03, objectToWorld._m13, objectToWorld._m23);
+                float t = _Time.y * _WindSpeed + pivotWS.x * 0.719 + pivotWS.z * 1.313;
+
+                float sway = sin(t)
+                           + sin(t * 2.17 + positionWS.x * 0.35 + positionWS.z * 0.27) * _WindVariation
+                           + sin(t * 0.53) * 0.35;
+                sway /= 1.35 + _WindVariation;
+
+                float3 crossDir = normalize(cross(windDir, float3(0.0, 1.0, 0.0)) + float3(0.0001, 0.0, 0.0001));
+                float crossSway = sin(t * 0.83 + 2.2)
+                                + sin(t * 1.71 + positionWS.x * 0.27 + positionWS.z * 0.35) * _WindVariation
+                                + sin(t * 0.41 + 1.1) * 0.35;
+                crossSway /= 1.35 + _WindVariation;
+
+                return (windDir * sway + crossDir * crossSway * _WindCrossSway) * (_WindStrength * mask);
+            }
         ENDHLSL
 
         Pass
@@ -121,13 +180,17 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
 
+            #pragma multi_compile_fragment _ DEBUG_DISPLAY
+
             #pragma multi_compile_local _ _ALPHATEST_ON
             #pragma multi_compile_local _ _RECEIVE_SHADOWS_OFF
             #pragma multi_compile_local _ _OVERLAY
             #pragma multi_compile_local _ _OVERLAY_FADE
             #pragma multi_compile_local _ _LIQUID
+            #pragma multi_compile_local_vertex _ _WIND_SWAY
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Debug/Debugging3D.hlsl"
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -220,6 +283,11 @@ Shader "Custom/CustomObjectLit"
                 VertexPositionInputs posInputs = GetVertexPositionInputs(input.positionOS.xyz);
                 VertexNormalInputs normInputs  = GetVertexNormalInputs(input.normalOS, input.tangentOS);
 
+                #if defined(_WIND_SWAY)
+                    posInputs.positionWS += WindSwayOffset(posInputs.positionWS, input.positionOS.xyz);
+                    posInputs.positionCS = TransformWorldToHClip(posInputs.positionWS);
+                #endif
+
                 output.positionCS = posInputs.positionCS;
                 output.positionWS = posInputs.positionWS;
                 output.positionOS = input.positionOS.xyz;
@@ -275,7 +343,7 @@ Shader "Custom/CustomObjectLit"
                     overlayFactor *= _OverlayIntensity;
 
                     #if defined(_OVERLAY_FADE)
-                        half3 fadePos = lerp(input.positionWS, input.positionOS, _OverlayFadeObjectSpace);
+                        half3 fadePos = lerp(TransformObjectToWorld(input.positionOS), input.positionOS, _OverlayFadeObjectSpace);
                         half fadeProj = dot(fadePos, normalize(_OverlayFadeAxis.xyz));
                         half fadeT = saturate((fadeProj - _OverlayFadeMin) / (_OverlayFadeMax - _OverlayFadeMin + 0.0001));
                         half fadeMask = fadeT * fadeT * (3.0 - 2.0 * fadeT);
@@ -320,6 +388,12 @@ Shader "Custom/CustomObjectLit"
                 surfaceData.emission = emission;
                 surfaceData.alpha = baseSample.a;
 
+                #if defined(DEBUG_DISPLAY)
+                    half4 debugColor;
+                    if (CanDebugOverrideOutputColor(inputData, surfaceData, debugColor))
+                        return debugColor;
+                #endif
+
                 return UniversalFragmentPBR(inputData, surfaceData);
             }
             ENDHLSL
@@ -342,6 +416,7 @@ Shader "Custom/CustomObjectLit"
             #pragma fragment frag
             #pragma multi_compile_instancing
             #pragma multi_compile_local _ _ALPHATEST_ON
+            #pragma multi_compile_local_vertex _ _WIND_SWAY
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -370,7 +445,15 @@ Shader "Custom/CustomObjectLit"
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
                 output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+
+                #if defined(_WIND_SWAY)
+                    float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                    positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                    output.positionCS = TransformWorldToHClip(positionWS);
+                #else
+                    output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                #endif
+
                 return output;
             }
 
@@ -408,6 +491,7 @@ Shader "Custom/CustomObjectLit"
 
             #pragma multi_compile_instancing
             #pragma multi_compile_local _ _ALPHATEST_ON
+            #pragma multi_compile_local_vertex _ _WIND_SWAY
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -435,7 +519,15 @@ Shader "Custom/CustomObjectLit"
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
                 output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+
+                #if defined(_WIND_SWAY)
+                    float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                    positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                    output.positionCS = TransformWorldToHClip(positionWS);
+                #else
+                    output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                #endif
+
                 return output;
             }
 

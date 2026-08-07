@@ -145,7 +145,15 @@ MonoBehaviour:
     boolValue: 0
     stringValue: down
     optionsString: down,flat,up1,up2
+  - name: color
+    type: 5
+    intValue: 0
+    floatValue: 0
+    boolValue: 0
+    stringValue: orange+blue
+    optionsString: orange+blue, blue+orange, purple+green, cyan+red
   id: snowcannon
+  forceUniformScale: 0
 --- !u!1 &5967996134568563594
 GameObject:
   m_ObjectHideFlags: 0

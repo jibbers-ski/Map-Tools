@@ -55,6 +55,11 @@ namespace Jibbers.MapTools
                 int idx = Mathf.Clamp(colorIdxProp.intValue, 0, markingColorNames.Length - 1);
                 colorIdxProp.intValue = EditorGUI.Popup(Row(), "markingColor", idx, markingColorNames);
             }
+            else if (targetProp.enumValueIndex == (int) PaintTarget.Powder)
+            {
+                var depthProp = property.FindPropertyRelative("powderDepth");
+                depthProp.floatValue = EditorGUI.Slider(Row(), "powderDepth", depthProp.floatValue, 0f, 1f);
+            }
 
             var eraseProp = property.FindPropertyRelative("erase");
             eraseProp.boolValue = EditorGUI.Toggle(Row(), "erase", eraseProp.boolValue);
@@ -75,14 +80,15 @@ namespace Jibbers.MapTools
         {
             float line = EditorGUIUtility.singleLineHeight;
             if (!property.isExpanded) return line;
-            bool marking = property.FindPropertyRelative("target").enumValueIndex == (int) PaintTarget.Marking;
-            int rows = marking ? 16 : 15;
+            int tgt = property.FindPropertyRelative("target").enumValueIndex;
+            bool extraRow = tgt == (int) PaintTarget.Marking || tgt == (int) PaintTarget.Powder;
+            int rows = extraRow ? 16 : 15;
             return line + (rows * (line + Spacing)) + 100f;
         }
     }
 #endif
 
-    public enum PaintTarget { Snow, Marking }
+    public enum PaintTarget { Snow, Marking, Powder }
 
     [Serializable]
     public class TerrainPaintInsert : TerrainInsert
@@ -103,6 +109,7 @@ namespace Jibbers.MapTools
 
         public PaintTarget target          = PaintTarget.Marking;
         public int         markingColorIdx = 0;
+        public float       powderDepth     = 1f;
         public bool        erase           = false;
         public float       coverage        = 1f;
     }

@@ -49,6 +49,14 @@ namespace Jibbers.MapTools
 #endif
         public bool forceUniformScale;
 
+#if UNITY_EDITOR
+    void OnValidate()
+    {
+        foreach(var sub in GetComponentsInChildren<MapSubobject>(true))
+            sub.Apply();
+    }
+#endif
+
     }
 
     public class MapObjectData : ISerializable

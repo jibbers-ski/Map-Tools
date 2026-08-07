@@ -45,8 +45,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bf5699b66c8338c49a83470ff04249fd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: fun.jibbers.map-tools::Jibbers.MapTools.MapObject
-  parameters: []
+  parameters:
+  - name: color
+    type: 5
+    intValue: 0
+    floatValue: 0
+    boolValue: 0
+    stringValue: blue
+    optionsString: blue, black, red, green, pink, cyan, orange
   id: tube_long
+  forceUniformScale: 0
 --- !u!1 &8156485571108626242
 GameObject:
   m_ObjectHideFlags: 0

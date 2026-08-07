@@ -1,0 +1,570 @@
+#pragma kernel ClearRock
+#pragma kernel Generate
+#pragma kernel Smooth
+#pragma kernel Thermal
+#pragma kernel HeightToInt
+#pragma kernel Droplet
+#pragma kernel IntToHeight
+#pragma kernel SnowAccumulate
+#pragma kernel SnowSettle
+#pragma kernel Composite
+
+RWTexture2D<float>  HeightMap;
+RWTexture2D<float>  RockMask;
+
+RWTexture2D<float>  HIn;
+RWTexture2D<float>  HOut;
+RWTexture2D<float>  HStruct;
+RWTexture2D<float>  SnowIn;
+RWTexture2D<float>  SnowOut;
+RWTexture2D<float>  SimBase;
+RWTexture2D<float>  SimMask;
+
+RWStructuredBuffer<int> HeightInt;
+
+StructuredBuffer<float2> Poly;
+int   polyCount;
+StructuredBuffer<float>  DomeProfile;
+int   domeProfileRes;
+
+int   res;
+int2  regionMin;
+int2  regionSize;
+float sizeX;
+float sizeZ;
+float sizeY;
+float cellX;
+float cellZ;
+float terrainPosY;
+
+float edgeFalloff;
+float domeReach;
+float peakHeight;
+int   blendMode;
+float baseHeight;
+float baseLevelN;
+
+int   noiseType;
+float noiseHeight;
+float noiseScale;
+int   octaves;
+float lacunarity;
+float gain;
+float warp;
+uint  seed;
+float noiseFollowsDome;
+
+float smoothStrength;
+
+float talusThreshold;
+float thermalStrength;
+
+int   numDroplets;
+int   maxLifetime;
+float inertia;
+float capacity;
+float deposit;
+float erode;
+float evaporate;
+int   erosionRadius;
+uint  dropletSeed;
+int   dropletOffset;
+float maxErodeStep;
+
+float snowAmount;
+float snowLineLow;
+float snowLineHigh;
+float snowSlopeStart;
+float snowSlopeFull;
+float snowCrevice;
+int   snowStencil;
+float snowStrength;
+float snowAddsHeight;
+
+float rockStrength;
+
+static const float HEIGHT_SCALE = 1048576.0;
+
+int CX(int v) { return clamp(v, 0, regionSize.x - 1); }
+int CY(int v) { return clamp(v, 0, regionSize.y - 1); }
+
+float SampleDome(float t)
+{
+    t = saturate(t);
+    float fi = t * (domeProfileRes - 1);
+    int   lo = (int)floor(fi);
+    int   hi = min(lo + 1, domeProfileRes - 1);
+    return lerp(DomeProfile[lo], DomeProfile[hi], frac(fi));
+}
+
+uint Hash(uint x, uint y, uint s)
+{
+    uint h = x * 374761393u + y * 668265263u + s * 362437u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+}
+
+uint Hash1(uint x)
+{
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+float2 Grad(int2 i, uint s)
+{
+    uint h = Hash((uint)(i.x + 8192), (uint)(i.y + 8192), s);
+    float ang = (h & 0xffffu) / 65535.0 * 6.28318530718;
+    return float2(cos(ang), sin(ang));
+}
+
+float Perlin(float2 p, uint s)
+{
+    int2 i = (int2)floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = dot(Grad(i + int2(0, 0), s), f - float2(0, 0));
+    float b = dot(Grad(i + int2(1, 0), s), f - float2(1, 0));
+    float c = dot(Grad(i + int2(0, 1), s), f - float2(0, 1));
+    float d = dot(Grad(i + int2(1, 1), s), f - float2(1, 1));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float Fbm(float2 p, int oct, uint s)
+{
+    float sum = 0.0, amp = 0.5, norm = 0.0;
+    [loop]
+    for (int o = 0; o < oct; o++)
+    {
+        sum += Perlin(p, s + (uint)o) * amp;
+        norm += amp;
+        amp *= gain;
+        p *= lacunarity;
+    }
+    return norm > 0.0 ? sum / norm : 0.0;
+}
+
+float Ridged(float2 p, int oct, uint s)
+{
+    float sum = 0.0, amp = 0.5, norm = 0.0, weight = 1.0;
+    [loop]
+    for (int o = 0; o < oct; o++)
+    {
+        float n = 1.0 - abs(Perlin(p, s + (uint)o));
+        n *= n;
+        n *= weight;
+        weight = saturate(n * 1.0);
+        sum += n * amp;
+        norm += amp;
+        amp *= gain;
+        p *= lacunarity;
+    }
+    return norm > 0.0 ? sum / norm : 0.0;
+}
+
+float NoiseAt(float2 worldXZ, float domeT)
+{
+    float2 sp = worldXZ / max(noiseScale, 0.01);
+    int warpOct = min(octaves, 4);
+    if (warp > 0.0)
+    {
+        float2 q = float2(Fbm(sp + 11.5, warpOct, seed + 37u), Fbm(sp + 27.3, warpOct, seed + 91u));
+        sp += q * warp;
+    }
+    float nVal;
+    if (noiseType == 1)
+        nVal = Ridged(sp, octaves, seed) - 0.4;
+    else if (noiseType == 2)
+        nVal = (abs(Fbm(sp, octaves, seed)) - 0.2) * 2.0;
+    else
+        nVal = Fbm(sp, octaves, seed);
+    float ampF = lerp(1.0, domeT, saturate(noiseFollowsDome));
+    return nVal * noiseHeight * ampF;
+}
+
+bool PolySignedDistance(float2 p, out float dist)
+{
+    bool inside = false;
+    float md = 1e30;
+    int j = polyCount - 1;
+    for (int i = 0; i < polyCount; i++)
+    {
+        float2 a = Poly[i];
+        float2 b = Poly[j];
+        if (((a.y > p.y) != (b.y > p.y)) &&
+            (p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x))
+            inside = !inside;
+        float2 ab = b - a;
+        float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-6));
+        float2 dq = p - (a + ab * t);
+        md = min(md, dot(dq, dq));
+        j = i;
+    }
+    dist = sqrt(md);
+    return inside;
+}
+
+[numthreads(8, 8, 1)]
+void ClearRock(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= res || (int)id.y >= res) return;
+    RockMask[int2(id.x, id.y)] = 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void Generate(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int2 lp = int2(id.x, id.y);
+    int2 gp = regionMin + lp;
+
+    float origN = 0.0;
+    float mask = 0.0;
+    float outN = 0.0;
+
+    if (gp.x >= 0 && gp.y >= 0 && gp.x < res && gp.y < res)
+    {
+        origN = HeightMap[gp];
+        outN = origN;
+
+        float lx = (float)gp.x / (res - 1) * sizeX;
+        float lz = (float)gp.y / (res - 1) * sizeZ;
+        float2 p = float2(lx, lz);
+
+        float dist;
+        bool inside = PolySignedDistance(p, dist);
+        if (inside)
+        {
+            mask = edgeFalloff > 0.0 ? saturate(dist / edgeFalloff) : 1.0;
+            mask = mask * mask * (3.0 - 2.0 * mask);
+
+            float domeT = domeReach > 0.0 ? saturate(dist / domeReach) : 1.0;
+            float dome = SampleDome(domeT) * peakHeight;
+            float noiseM = NoiseAt(p, domeT);
+            float surfN = (dome + noiseM) / sizeY + baseHeight;
+
+            if (blendMode == 0)
+                outN = origN + surfN * mask;
+            else
+            {
+                float target = baseLevelN + surfN;
+                float shaped = blendMode == 1 ? max(origN, target)
+                             : blendMode == 2 ? min(origN, target)
+                             : target;
+                outN = lerp(origN, shaped, mask);
+            }
+        }
+    }
+
+    HOut[lp] = outN;
+    SimBase[lp] = origN;
+    SimMask[lp] = mask;
+}
+
+[numthreads(8, 8, 1)]
+void Smooth(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int x = id.x, y = id.y;
+    float sum = 0.0;
+    [unroll]
+    for (int dy = -1; dy <= 1; dy++)
+        [unroll]
+        for (int dx = -1; dx <= 1; dx++)
+            sum += HIn[int2(CX(x + dx), CY(y + dy))];
+    float avg = sum / 9.0;
+    float h = HIn[int2(x, y)];
+    float amt = smoothStrength * SimMask[int2(x, y)];
+    HOut[int2(x, y)] = lerp(h, avg, amt);
+}
+
+[numthreads(8, 8, 1)]
+void Thermal(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int x = id.x, y = id.y;
+    float hC = HIn[int2(x, y)];
+
+    float net = 0.0;
+    int2 offs[8] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
+        int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1)
+    };
+    [unroll]
+    for (int k = 0; k < 8; k++)
+    {
+        float hN = HIn[int2(CX(x + offs[k].x), CY(y + offs[k].y))];
+        float thr = k < 4 ? talusThreshold : talusThreshold * 1.41421356;
+        float dh = hC - hN;
+        float excess = max(0.0, abs(dh) - thr);
+        float flow = 0.125 * thermalStrength * excess;
+        net += dh > 0.0 ? -flow : flow;
+    }
+    HOut[int2(x, y)] = hC + net;
+}
+
+[numthreads(8, 8, 1)]
+void HeightToInt(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    HeightInt[id.y * regionSize.x + id.x] = (int)(HIn[int2(id.x, id.y)] * HEIGHT_SCALE);
+}
+
+[numthreads(8, 8, 1)]
+void IntToHeight(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    HOut[int2(id.x, id.y)] = clamp(HeightInt[id.y * regionSize.x + id.x] / HEIGHT_SCALE, 0.0, 2.0);
+}
+
+float HeightAt(int cx, int cy)
+{
+    cx = clamp(cx, 0, regionSize.x - 1);
+    cy = clamp(cy, 0, regionSize.y - 1);
+    return clamp(HeightInt[cy * regionSize.x + cx] / HEIGHT_SCALE, -1.0, 3.0);
+}
+
+void AddHeight(int cx, int cy, float amount)
+{
+    cx = clamp(cx, 0, regionSize.x - 1);
+    cy = clamp(cy, 0, regionSize.y - 1);
+    int amt = (int)round(amount * HEIGHT_SCALE);
+    InterlockedAdd(HeightInt[cy * regionSize.x + cx], amt);
+}
+
+[numthreads(64, 1, 1)]
+void Droplet(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= numDroplets) return;
+
+    uint rng = Hash1((uint)((int)id.x + dropletOffset) * 1973u + dropletSeed * 9277u + 1u);
+    float posX = 0.0, posY = 0.0;
+    bool spawned = false;
+    [loop]
+    for (int t = 0; t < 8; t++)
+    {
+        posX = (rng & 0xffffu) / 65535.0 * (regionSize.x - 1);
+        rng = Hash1(rng);
+        posY = (rng & 0xffffu) / 65535.0 * (regionSize.y - 1);
+        rng = Hash1(rng);
+        if (SimMask[int2((int)posX, (int)posY)] > 0.01)
+        {
+            spawned = true;
+            break;
+        }
+    }
+    if (!spawned) return;
+
+    int R = clamp(erosionRadius, 1, 4);
+    float wSum = 1.0;
+    if (R > 1)
+    {
+        wSum = 0.0;
+        [loop]
+        for (int wy = -R; wy <= R; wy++)
+            [loop]
+            for (int wx = -R; wx <= R; wx++)
+                wSum += max(0.0, 1.0 - sqrt((float)(wx * wx + wy * wy)) / R);
+    }
+
+    float dirX = 0.0, dirY = 0.0;
+    float speed = 1.0;
+    float water = 1.0;
+    float sediment = 0.0;
+    int nodeX = 0, nodeY = 0;
+    float offX = 0.0, offY = 0.0;
+    bool leftRegion = false;
+
+    [loop]
+    for (int life = 0; life < maxLifetime; life++)
+    {
+        nodeX = (int)posX;
+        nodeY = (int)posY;
+        offX = posX - nodeX;
+        offY = posY - nodeY;
+
+        float hNW = HeightAt(nodeX, nodeY);
+        float hNE = HeightAt(nodeX + 1, nodeY);
+        float hSW = HeightAt(nodeX, nodeY + 1);
+        float hSE = HeightAt(nodeX + 1, nodeY + 1);
+
+        float height = hNW * (1 - offX) * (1 - offY) + hNE * offX * (1 - offY)
+                     + hSW * (1 - offX) * offY + hSE * offX * offY;
+        float gradX = (hNE - hNW) * (1 - offY) + (hSE - hSW) * offY;
+        float gradY = (hSW - hNW) * (1 - offX) + (hSE - hNE) * offX;
+
+        dirX = dirX * inertia - gradX * (1.0 - inertia);
+        dirY = dirY * inertia - gradY * (1.0 - inertia);
+        float len = sqrt(dirX * dirX + dirY * dirY);
+        if (len <= 1e-6) break;
+        dirX /= len; dirY /= len;
+
+        posX += dirX;
+        posY += dirY;
+
+        if (posX < 0.0 || posX > regionSize.x - 1 || posY < 0.0 || posY > regionSize.y - 1)
+        {
+            leftRegion = true;
+            break;
+        }
+
+        int nX = (int)posX;
+        int nY = (int)posY;
+        float aX = posX - nX;
+        float aY = posY - nY;
+        float mNW = HeightAt(nX, nY);
+        float mNE = HeightAt(nX + 1, nY);
+        float mSW = HeightAt(nX, nY + 1);
+        float mSE = HeightAt(nX + 1, nY + 1);
+        float newHeight = mNW * (1 - aX) * (1 - aY) + mNE * aX * (1 - aY)
+                        + mSW * (1 - aX) * aY + mSE * aX * aY;
+
+        float deltaHeight = newHeight - height;
+        float cap = max(-deltaHeight, 0.0004) * speed * water * capacity;
+
+        if (sediment > cap || deltaHeight > 0.0)
+        {
+            float amount = (deltaHeight > 0.0) ? min(deltaHeight, sediment) : (sediment - cap) * deposit;
+            sediment -= amount;
+            AddHeight(nodeX,     nodeY,     amount * (1 - offX) * (1 - offY));
+            AddHeight(nodeX + 1, nodeY,     amount * offX * (1 - offY));
+            AddHeight(nodeX,     nodeY + 1, amount * (1 - offX) * offY);
+            AddHeight(nodeX + 1, nodeY + 1, amount * offX * offY);
+        }
+        else
+        {
+            float amount = min(min((cap - sediment) * erode, -deltaHeight), maxErodeStep);
+            sediment += amount;
+            if (R <= 1)
+            {
+                AddHeight(nodeX,     nodeY,     -amount * (1 - offX) * (1 - offY));
+                AddHeight(nodeX + 1, nodeY,     -amount * offX * (1 - offY));
+                AddHeight(nodeX,     nodeY + 1, -amount * (1 - offX) * offY);
+                AddHeight(nodeX + 1, nodeY + 1, -amount * offX * offY);
+            }
+            else
+            {
+                [loop]
+                for (int by = -R; by <= R; by++)
+                    [loop]
+                    for (int bx = -R; bx <= R; bx++)
+                    {
+                        int cx = nodeX + bx;
+                        int cy = nodeY + by;
+                        if (cx < 0 || cy < 0 || cx >= regionSize.x || cy >= regionSize.y) continue;
+                        float w = max(0.0, 1.0 - sqrt((float)(bx * bx + by * by)) / R);
+                        if (w > 0.0)
+                            AddHeight(cx, cy, -amount * w / wSum);
+                    }
+            }
+        }
+
+        speed = sqrt(max(0.0, speed * speed + (-deltaHeight) * 4.0));
+        water *= (1.0 - evaporate);
+        if (water < 0.01) break;
+    }
+
+    if (!leftRegion && sediment > 0.0001)
+    {
+        nodeX = (int)posX;
+        nodeY = (int)posY;
+        offX = posX - nodeX;
+        offY = posY - nodeY;
+        if (R <= 1)
+        {
+            AddHeight(nodeX,     nodeY,     sediment * (1 - offX) * (1 - offY));
+            AddHeight(nodeX + 1, nodeY,     sediment * offX * (1 - offY));
+            AddHeight(nodeX,     nodeY + 1, sediment * (1 - offX) * offY);
+            AddHeight(nodeX + 1, nodeY + 1, sediment * offX * offY);
+        }
+        else
+        {
+            [loop]
+            for (int by = -R; by <= R; by++)
+                [loop]
+                for (int bx = -R; bx <= R; bx++)
+                {
+                    int cx = nodeX + bx;
+                    int cy = nodeY + by;
+                    if (cx < 0 || cy < 0 || cx >= regionSize.x || cy >= regionSize.y) continue;
+                    float w = max(0.0, 1.0 - sqrt((float)(bx * bx + by * by)) / R);
+                    if (w > 0.0)
+                        AddHeight(cx, cy, sediment * w / wSum);
+                }
+        }
+    }
+}
+
+[numthreads(8, 8, 1)]
+void SnowAccumulate(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int x = id.x, y = id.y;
+
+    int D = max(snowStencil, 1);
+    float hL = HStruct[int2(CX(x - D), y)];
+    float hR = HStruct[int2(CX(x + D), y)];
+    float hD = HStruct[int2(x, CY(y - D))];
+    float hU = HStruct[int2(x, CY(y + D))];
+    float dhx = (hR - hL) * sizeY / (2.0 * cellX * D);
+    float dhz = (hU - hD) * sizeY / (2.0 * cellZ * D);
+    float slopeDeg = degrees(atan(sqrt(dhx * dhx + dhz * dhz)));
+
+    float altFactor = 1.0;
+    if (snowLineHigh >= 0.0)
+    {
+        float worldY = terrainPosY + HIn[int2(x, y)] * sizeY;
+        altFactor = smoothstep(snowLineLow, max(snowLineHigh, snowLineLow + 0.01), worldY);
+    }
+    float slopeFactor = 1.0 - smoothstep(snowSlopeStart, max(snowSlopeFull, snowSlopeStart + 0.01), slopeDeg);
+
+    int D2 = min(D * 2, 8);
+    float cL = HStruct[int2(CX(x - D2), y)];
+    float cR = HStruct[int2(CX(x + D2), y)];
+    float cD = HStruct[int2(x, CY(y - D2))];
+    float cU = HStruct[int2(x, CY(y + D2))];
+    float curv = ((cL + cR + cD + cU) * 0.25 - HStruct[int2(x, y)]) * sizeY / (D2 * cellX);
+    float curvTerm = clamp(curv * snowCrevice * 1.5, -0.6, 0.6);
+    SnowOut[int2(x, y)] = saturate(slopeFactor + curvTerm) * altFactor;
+}
+
+[numthreads(8, 8, 1)]
+void SnowSettle(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int x = id.x, y = id.y;
+    float sum = 0.0;
+    [unroll]
+    for (int dy = -1; dy <= 1; dy++)
+        [unroll]
+        for (int dx = -1; dx <= 1; dx++)
+            sum += SnowIn[int2(CX(x + dx), CY(y + dy))];
+    float avg = sum / 9.0;
+    SnowOut[int2(x, y)] = saturate(lerp(SnowIn[int2(x, y)], avg, snowStrength));
+}
+
+[numthreads(8, 8, 1)]
+void Composite(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= regionSize.x || (int)id.y >= regionSize.y) return;
+    int2 lp = int2(id.x, id.y);
+    int2 gp = regionMin + lp;
+    if (gp.x < 0 || gp.y < 0 || gp.x >= res || gp.y >= res) return;
+
+    float mask = SimMask[lp];
+    float baseN = SimBase[lp];
+    float hN = HIn[lp];
+    float coverage = saturate(SnowIn[lp]);
+
+    int D = min(max(snowStencil, 1) * 2, 8);
+    float hAvg = (HIn[int2(CX(lp.x - D), lp.y)] + HIn[int2(CX(lp.x + D), lp.y)]
+                + HIn[int2(lp.x, CY(lp.y - D))] + HIn[int2(lp.x, CY(lp.y + D))]) * 0.25;
+    float fill = max(0.0, hAvg - hN);
+
+    float finalN = hN + snowAddsHeight * coverage * (snowAmount + fill);
+    float outN = lerp(baseN, finalN, mask);
+    HeightMap[gp] = saturate(outN);
+
+    float rockT = smoothstep(0.3, 0.7, 1.0 - coverage);
+    float rockCov = rockT * mask * rockStrength;
+    RockMask[gp] = max(RockMask[gp], rockCov);
+}

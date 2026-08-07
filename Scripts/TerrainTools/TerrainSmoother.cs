@@ -12,7 +12,12 @@ namespace Jibbers.MapTools
     {
         int  smoothRadius      = 3;
         bool smoothOnlySnow;
+        Texture2D smoothMaskTex;
+        int  smoothMaskChannel;
+        bool smoothMaskInvert;
+        bool smoothMaskFlip    = true;
         bool smoothArmed;
+        static readonly string[] maskChannelLabels = { "R", "G", "B", "A" };
 
         int  smoothPaintRadius  = 3;
         int  smoothPaintChannel;
@@ -29,8 +34,16 @@ namespace Jibbers.MapTools
         {
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("Smooth Terrain", EditorStyles.boldLabel);
-            smoothRadius   = EditorGUILayout.IntSlider("Radius",   smoothRadius, 1, 50);
-            smoothOnlySnow = EditorGUILayout.Toggle  ("Only Snow", smoothOnlySnow);
+            smoothRadius = EditorGUILayout.IntSlider("Radius", smoothRadius, 1, 50);
+            using (new EditorGUI.DisabledScope(smoothMaskTex != null))
+                smoothOnlySnow = EditorGUILayout.Toggle("Only Snow", smoothOnlySnow);
+            smoothMaskTex = (Texture2D) EditorGUILayout.ObjectField("Custom Mask", smoothMaskTex, typeof(Texture2D), false);
+            if (smoothMaskTex != null)
+            {
+                smoothMaskChannel = EditorGUILayout.Popup ("Mask Channel", smoothMaskChannel, maskChannelLabels);
+                smoothMaskInvert  = EditorGUILayout.Toggle("Invert Mask", smoothMaskInvert);
+                smoothMaskFlip    = EditorGUILayout.Toggle("Flip Vertically (Gaea)", smoothMaskFlip);
+            }
 
             string buttonLabel = targets.Length > 1 ? $"Smooth {targets.Length} Terrains" : "Smooth Terrain";
 
@@ -42,11 +55,10 @@ namespace Jibbers.MapTools
             else
             {
                 string scope = targets.Length > 1 ? $"{targets.Length} terrains" : "the heightmap";
-                EditorGUILayout.HelpBox(
-                    smoothOnlySnow
-                        ? $"This will smooth {scope} (radius {smoothRadius}) only where snow is painted."
-                        : $"This will smooth {scope} (radius {smoothRadius}).",
-                    MessageType.Warning);
+                string where = smoothMaskTex != null
+                    ? $" only where mask '{smoothMaskTex.name}' ({maskChannelLabels[smoothMaskChannel]}{(smoothMaskInvert ? ", inverted" : "")}) is set"
+                    : smoothOnlySnow ? " only where snow is painted" : "";
+                EditorGUILayout.HelpBox($"This will smooth {scope} (radius {smoothRadius}){where}.", MessageType.Warning);
                 EditorGUILayout.BeginHorizontal();
                 if (GUILayout.Button("Confirm"))
                 {
@@ -55,11 +67,13 @@ namespace Jibbers.MapTools
                         var smoothers = new TerrainSmoother[targets.Length];
                         for (int i = 0; i < targets.Length; i++)
                             smoothers[i] = (TerrainSmoother) targets[i];
-                        TerrainSmoother.SmoothMultiple(smoothers, smoothRadius, smoothOnlySnow);
+                        TerrainSmoother.SmoothMultiple(smoothers, smoothRadius, smoothOnlySnow && smoothMaskTex == null,
+                            smoothMaskTex, smoothMaskChannel, smoothMaskInvert, smoothMaskFlip);
                     }
                     else
                     {
-                        ((TerrainSmoother) target).Smooth(smoothRadius, smoothOnlySnow);
+                        ((TerrainSmoother) target).Smooth(smoothRadius, smoothOnlySnow && smoothMaskTex == null,
+                            smoothMaskTex, smoothMaskChannel, smoothMaskInvert, smoothMaskFlip);
                     }
                     smoothArmed = false;
                 }
@@ -107,36 +121,92 @@ namespace Jibbers.MapTools
     [RequireComponent(typeof(Terrain))]
     public class TerrainSmoother : MonoBehaviour
     {
-        public void Smooth(int radius, bool onlySnow)
+        public struct SmoothMask
+        {
+            float[] values;
+            int w, h;
+            bool flip;
+
+            public bool Valid => values != null;
+
+            public static SmoothMask FromTexture(Texture2D tex, int channel, bool invert, bool flip)
+            {
+                if (tex == null || !tex.isReadable)
+                    return default;
+                var pixels = tex.GetPixels();
+                var vals = new float[pixels.Length];
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    var c = pixels[i];
+                    float v;
+                    switch (channel)
+                    {
+                        case 1:  v = c.g; break;
+                        case 2:  v = c.b; break;
+                        case 3:  v = c.a; break;
+                        default: v = c.r; break;
+                    }
+                    vals[i] = invert ? 1f - v : v;
+                }
+                return new SmoothMask { values = vals, w = tex.width, h = tex.height, flip = flip };
+            }
+
+            public static SmoothMask FromSnowMask(Terrain terrain)
+            {
+                var mat = terrain != null ? terrain.materialTemplate : null;
+                if (mat == null || !mat.HasProperty("_SnowMask"))
+                    return default;
+                var tex = mat.GetTexture("_SnowMask") as Texture2D;
+                if (tex != null && !tex.isReadable)
+                {
+                    Debug.LogWarning("[TerrainSmoother] Snow mask not readable — smoothing whole terrain.");
+                    return default;
+                }
+                return FromTexture(tex, 0, false, true);
+            }
+
+            public float Sample(float u, float v)
+            {
+                if (flip) v = 1f - v;
+                float mx = u * (w - 1);
+                float my = v * (h - 1);
+                int x0 = Mathf.FloorToInt(mx);
+                int y0 = Mathf.FloorToInt(my);
+                int x1 = Mathf.Min(x0 + 1, w - 1);
+                int y1 = Mathf.Min(y0 + 1, h - 1);
+                float tx = mx - x0;
+                float ty = my - y0;
+                float c00 = values[y0 * w + x0];
+                float c01 = values[y0 * w + x1];
+                float c10 = values[y1 * w + x0];
+                float c11 = values[y1 * w + x1];
+                return Mathf.Lerp(Mathf.Lerp(c00, c01, tx), Mathf.Lerp(c10, c11, tx), ty);
+            }
+        }
+
+        public void Smooth(int radius, bool onlySnow, Texture2D maskTexture = null, int maskChannel = 0, bool maskInvert = false, bool maskFlip = true)
         {
             var terrain = GetComponent<Terrain>();
             var data = terrain.terrainData;
+
+            SmoothMask mask;
+            if (maskTexture != null)
+            {
+                mask = SmoothMask.FromTexture(maskTexture, maskChannel, maskInvert, maskFlip);
+                if (!mask.Valid)
+                {
+                    Debug.LogError($"[TerrainSmoother] Mask '{maskTexture.name}' must be readable. Enable Read/Write in import settings.");
+                    return;
+                }
+            }
+            else
+                mask = onlySnow ? SmoothMask.FromSnowMask(terrain) : default;
+
 #if UNITY_EDITOR
             UnityEditor.Undo.RegisterCompleteObjectUndo(data, "Smooth Terrain");
 #endif
             int res = data.heightmapResolution;
             float[,] src = data.GetHeights(0, 0, res, res);
-
-            Color[] maskPixels = null;
-            int maskW = 0, maskH = 0;
-            if (onlySnow)
-            {
-                var mat = terrain.materialTemplate;
-                if (mat != null && mat.HasProperty("_SnowMask"))
-                {
-                    var maskTex = mat.GetTexture("_SnowMask") as Texture2D;
-                    if (maskTex != null && maskTex.isReadable)
-                    {
-                        maskPixels = maskTex.GetPixels();
-                        maskW = maskTex.width;
-                        maskH = maskTex.height;
-                    }
-                    else if (maskTex != null)
-                    {
-                        Debug.LogWarning("[TerrainSmoother] Snow mask not readable — smoothing whole terrain.");
-                    }
-                }
-            }
 
             int r = Mathf.Max(1, radius);
             float[,] tmp = new float[res, res];
@@ -172,28 +242,15 @@ namespace Jibbers.MapTools
                 }
             }
 
-            if (maskPixels != null)
+            if (mask.Valid)
             {
                 for (int y = 0; y < res; y++)
                 {
                     float v = (float) y / (res - 1);
-                    float my = (1f - v) * (maskH - 1);
-                    int my0 = Mathf.FloorToInt(my);
-                    int my1 = Mathf.Min(my0 + 1, maskH - 1);
-                    float ty = my - my0;
                     for (int x = 0; x < res; x++)
                     {
                         float u = (float) x / (res - 1);
-                        float mx = u * (maskW - 1);
-                        int mx0 = Mathf.FloorToInt(mx);
-                        int mx1 = Mathf.Min(mx0 + 1, maskW - 1);
-                        float tx = mx - mx0;
-                        float c00 = maskPixels[my0 * maskW + mx0].r;
-                        float c01 = maskPixels[my0 * maskW + mx1].r;
-                        float c10 = maskPixels[my1 * maskW + mx0].r;
-                        float c11 = maskPixels[my1 * maskW + mx1].r;
-                        float snow = Mathf.Lerp(Mathf.Lerp(c00, c01, tx), Mathf.Lerp(c10, c11, tx), ty);
-                        dst[y, x] = Mathf.Lerp(src[y, x], dst[y, x], snow);
+                        dst[y, x] = Mathf.Lerp(src[y, x], dst[y, x], mask.Sample(u, v));
                     }
                 }
             }
@@ -201,11 +258,22 @@ namespace Jibbers.MapTools
             data.SetHeights(0, 0, dst);
         }
 
-        public static void SmoothMultiple(TerrainSmoother[] smoothers, int radius, bool onlySnow)
+        public static void SmoothMultiple(TerrainSmoother[] smoothers, int radius, bool onlySnow, Texture2D maskTexture = null, int maskChannel = 0, bool maskInvert = false, bool maskFlip = true)
         {
 #if UNITY_EDITOR
             int N = smoothers.Length;
             if (N == 0) return;
+
+            SmoothMask customMask = default;
+            if (maskTexture != null)
+            {
+                customMask = SmoothMask.FromTexture(maskTexture, maskChannel, maskInvert, maskFlip);
+                if (!customMask.Valid)
+                {
+                    Debug.LogError($"[TerrainSmoother] Mask '{maskTexture.name}' must be readable. Enable Read/Write in import settings.");
+                    return;
+                }
+            }
 
             var terrains = new Terrain[N];
             for (int i = 0; i < N; i++) terrains[i] = smoothers[i].GetComponent<Terrain>();
@@ -335,46 +403,20 @@ namespace Jibbers.MapTools
                 }
             }
 
-            if (onlySnow)
+            if (maskTexture != null || onlySnow)
             {
                 for (int i = 0; i < N; i++)
                 {
+                    var mask = maskTexture != null ? customMask : SmoothMask.FromSnowMask(terrains[i]);
+                    if (!mask.Valid) continue;
                     int h = hRes[i], w = wRes[i];
-                    Color[] maskPixels = null;
-                    int maskW = 0, maskH = 0;
-                    var mat = terrains[i].materialTemplate;
-                    if (mat != null && mat.HasProperty("_SnowMask"))
-                    {
-                        var maskTex = mat.GetTexture("_SnowMask") as Texture2D;
-                        if (maskTex != null && maskTex.isReadable)
-                        {
-                            maskPixels = maskTex.GetPixels();
-                            maskW = maskTex.width;
-                            maskH = maskTex.height;
-                        }
-                    }
-                    if (maskPixels == null) continue;
-
                     for (int y = 0; y < h; y++)
                     {
                         float v = (float) y / (h - 1);
-                        float my = (1f - v) * (maskH - 1);
-                        int my0 = Mathf.FloorToInt(my);
-                        int my1 = Mathf.Min(my0 + 1, maskH - 1);
-                        float ty = my - my0;
                         for (int x = 0; x < w; x++)
                         {
                             float u = (float) x / (w - 1);
-                            float mx = u * (maskW - 1);
-                            int mx0 = Mathf.FloorToInt(mx);
-                            int mx1 = Mathf.Min(mx0 + 1, maskW - 1);
-                            float tx = mx - mx0;
-                            float c00 = maskPixels[my0 * maskW + mx0].r;
-                            float c01 = maskPixels[my0 * maskW + mx1].r;
-                            float c10 = maskPixels[my1 * maskW + mx0].r;
-                            float c11 = maskPixels[my1 * maskW + mx1].r;
-                            float snow = Mathf.Lerp(Mathf.Lerp(c00, c01, tx), Mathf.Lerp(c10, c11, tx), ty);
-                            dst[i][y, x] = Mathf.Lerp(src[i][y, x], dst[i][y, x], snow);
+                            dst[i][y, x] = Mathf.Lerp(src[i][y, x], dst[i][y, x], mask.Sample(u, v));
                         }
                     }
                 }

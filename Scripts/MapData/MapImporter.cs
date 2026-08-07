@@ -113,14 +113,24 @@ namespace Jibbers.MapTools
                 if(chunk.snowMaskData != null)
                 {
                     chunk.snowMaskData.compression = 0;
-                    snowMaskTex = chunk.snowMaskData.GetTexture();
+                    snowMaskTex = chunk.snowMaskData.GetTexture(forceMips: true);
                     terrain.materialTemplate.SetTexture("_SnowMask", snowMaskTex);
                     if (terrain.materialTemplate.HasProperty("_UseMasks"))
                         terrain.materialTemplate.SetFloat("_UseMasks", 1f);
                 }
 
-                if (chunk.snowMask4Channel && terrain.materialTemplate.HasProperty("_SnowMask4Channel"))
-                    terrain.materialTemplate.SetFloat("_SnowMask4Channel", 1f);
+                if (terrain.materialTemplate.HasProperty("_SnowMask4Channel"))
+                    terrain.materialTemplate.SetFloat("_SnowMask4Channel", chunk.snowMask4Channel ? 1f : 0f);
+
+                Texture2D snowMask2Tex = null;
+                if (chunk.snowMask2Data != null && terrain.materialTemplate.HasProperty("_SnowMask2"))
+                {
+                    chunk.snowMask2Data.compression = 0;
+                    snowMask2Tex = chunk.snowMask2Data.GetTexture();
+                    terrain.materialTemplate.SetTexture("_SnowMask2", snowMask2Tex);
+                }
+
+                ApplyThirdLayer(terrain.materialTemplate, map.version, snowMask2Tex != null);
 
                 terrain.Flush();
 
@@ -128,7 +138,11 @@ namespace Jibbers.MapTools
                 mapObjects.parent = terrainGO.transform;
                 foreach(var mapObject in chunk.objects)
                 {
-                    var prefab = objPrefabDict[mapObject.id];
+                    if (!objPrefabDict.TryGetValue(mapObject.id, out var prefab))
+                    {
+                        Debug.LogError($"[MapImporter] Unknown map object id '{mapObject.id}', skipping object");
+                        continue;
+                    }
                     #if UNITY_EDITOR
                         var newObj = (Transform)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, mapObjects);
                     #else
@@ -183,6 +197,10 @@ namespace Jibbers.MapTools
                         cmo.canRotate        = obj.canRotate;
                         cmo.canMagnetize     = obj.canMagnetize;
                         cmo.intendedUpMethod = obj.intendedUpMethod;
+                        cmo.disableDistanceCulling = obj.disableDistanceCulling;
+                        cmo.timedVisibility  = obj.timedVisibility;
+                        cmo.visibleFromHour  = obj.visibleFromHour;
+                        cmo.visibleUntilHour = obj.visibleUntilHour;
 
                         var partRenderersByLodGroup = new Dictionary<int, List<(int lodIndex, Renderer renderer)>>();
 
@@ -291,6 +309,7 @@ namespace Jibbers.MapTools
                     terrain = terrain,
                     mapObjectContainer = mapObjects,
                     snowMask = snowMaskTex,
+                    snowMask2 = snowMask2Tex,
                     repeats = chunk.repeats,
                     repeatOffset = chunk.repeatOffset,
                 });
@@ -315,6 +334,22 @@ namespace Jibbers.MapTools
             UnityEditor.EditorUtility.SetDirty(exporter);
             #endif
         }
+
+        // Third (powder) layer. v0.4+ maps author the powder mask in the snow-mask alpha channel;
+        // flow direction rides SnowMask2 R (angle), applied per layer via the exported flags.
+        // Neutralise any built-in third data carried by the shared terrain material so a map's
+        // powder/flow comes only from its own masks.
+        static void ApplyThirdLayer(Material mat, string version, bool hasFlowMask2)
+        {
+            if (mat.HasProperty("_ThirdMaskTex"))     mat.SetTexture("_ThirdMaskTex", Texture2D.blackTexture);
+            if (mat.HasProperty("_FlowFromMask2"))    mat.SetFloat("_FlowFromMask2", hasFlowMask2 ? 1f : 0f);
+            if (mat.HasProperty("_SnowFlowEnabled"))  mat.SetFloat("_SnowFlowEnabled", hasFlowMask2 ? 1f : 0f);
+            if (mat.HasProperty("_ThirdFlowEnabled")) mat.SetFloat("_ThirdFlowEnabled", hasFlowMask2 ? 1f : 0f);
+            if (mat.HasProperty("_ThirdFromAlpha"))   mat.SetFloat("_ThirdFromAlpha", MapSupportsThird(version) ? 1f : 0f);
+        }
+
+        static bool MapSupportsThird(string version)
+            => System.Version.TryParse(version, out var v) && v >= new System.Version(0, 4);
 
         static string ColliderName(ColliderShape shape) => shape switch {
             ColliderShape.Box     => "BoxCollider",

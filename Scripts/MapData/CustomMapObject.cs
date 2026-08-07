@@ -23,6 +23,16 @@ namespace Jibbers.MapTools
         public bool canRotate = true;
         public bool canMagnetize = true;
         public IntendedUpMethod intendedUpMethod;
+
+        [Header("Culling")]
+        [Tooltip("The game hides distant map objects for performance. Enable this to keep the object visible at any distance (big landmarks, decorative mountains, ...).")]
+        public bool disableDistanceCulling;
+
+        [Header("Visibility")]
+        [Tooltip("Show this object only during a time-of-day window (24h clock). Collision stays active while hidden.")]
+        public bool timedVisibility;
+        public float visibleFromHour = 19f;
+        public float visibleUntilHour = 6f;
     }
 
 #if UNITY_EDITOR
@@ -45,7 +55,30 @@ namespace Jibbers.MapTools
                 UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("intendedUpMethod"));
             }
 
+            UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("disableDistanceCulling"));
+
+            UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("timedVisibility"));
+            if (obj.timedVisibility)
+            {
+                HourField(serializedObject.FindProperty("visibleFromHour"), "Show From");
+                HourField(serializedObject.FindProperty("visibleUntilHour"), "Show Until");
+            }
+
             serializedObject.ApplyModifiedProperties();
+        }
+
+        static void HourField(UnityEditor.SerializedProperty prop, string label)
+        {
+            float v = UnityEditor.EditorGUILayout.Slider(new GUIContent($"{label} ({FormatHour(prop.floatValue)})"), prop.floatValue, 0f, 24f);
+            prop.floatValue = Mathf.Round(v * 12f) / 12f;
+        }
+
+        static string FormatHour(float hours)
+        {
+            hours = Mathf.Repeat(hours, 24f);
+            int h = Mathf.FloorToInt(hours);
+            int m = Mathf.RoundToInt((hours - h) * 60f);
+            return $"{h:00}:{m:00}";
         }
     }
 #endif
@@ -255,6 +288,12 @@ namespace Jibbers.MapTools
         public bool canMagnetize = true;
         public IntendedUpMethod intendedUpMethod;
 
+        public bool disableDistanceCulling;
+
+        public bool timedVisibility;
+        public float visibleFromHour = 19f;
+        public float visibleUntilHour = 6f;
+
         public Vector3 position;
         public Vector3 rotation;
         public Vector3 scale;
@@ -276,6 +315,15 @@ namespace Jibbers.MapTools
                 canRotate        = serializer.SerializeBool("can-rotate", canRotate);
                 canMagnetize     = serializer.SerializeBool("can-magnetize", canMagnetize);
                 intendedUpMethod = (IntendedUpMethod) serializer.SerializeInt("intended-up-method", (int) intendedUpMethod);
+            }
+
+            disableDistanceCulling = serializer.SerializeBool("disable-distance-culling", disableDistanceCulling);
+
+            timedVisibility = serializer.SerializeBool("timed-visibility", timedVisibility);
+            if (timedVisibility)
+            {
+                visibleFromHour  = serializer.SerializeFloat("visible-from-hour", visibleFromHour);
+                visibleUntilHour = serializer.SerializeFloat("visible-until-hour", visibleUntilHour);
             }
 
             position = serializer.SerializeVector3("position", position);

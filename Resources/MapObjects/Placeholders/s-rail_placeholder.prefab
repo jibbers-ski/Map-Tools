@@ -1960,7 +1960,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bf5699b66c8338c49a83470ff04249fd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: fun.jibbers.map-tools::Jibbers.MapTools.MapObject
-  parameters: []
+  parameters:
+  - name: color
+    type: 5
+    intValue: 0
+    floatValue: 0
+    boolValue: 0
+    stringValue: black
+    optionsString: black, blue, red, green, pink, cyan, orange
   id: s-rail
   forceUniformScale: 1
 --- !u!1 &8147336439482808676

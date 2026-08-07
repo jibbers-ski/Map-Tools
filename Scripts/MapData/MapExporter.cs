@@ -33,23 +33,46 @@ namespace Jibbers.MapTools
         {
             serializedObject.Update();
             bool timeEnabled = false;
+            bool rawTime = false;
             var iter = serializedObject.GetIterator();
             iter.NextVisible(true);
             while (iter.NextVisible(false))
             {
                 if (iter.name == "overrideTime")
                 {
-                    EditorGUILayout.PropertyField(iter);
+                    EditorGUILayout.Space(8);
+                    EditorGUILayout.LabelField("Time of Day", EditorStyles.boldLabel);
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.PropertyField(iter, GUILayout.Width(EditorGUIUtility.labelWidth + 20));
                     timeEnabled = iter.boolValue;
+                    var rawProp = serializedObject.FindProperty("rawTime");
+                    EditorGUI.BeginDisabledGroup(!timeEnabled);
+                    rawProp.boolValue = EditorGUILayout.ToggleLeft(new GUIContent("Edit Raw Time Value",
+                        "Author the raw 0-1 dayNightT value directly instead of a 24h clock time."), rawProp.boolValue);
+                    rawTime = rawProp.boolValue;
+                    EditorGUI.EndDisabledGroup();
+                    EditorGUILayout.EndHorizontal();
                 }
-                else if (iter.name == "dayTime")
+                else if (iter.name == "rawTime")
+                {
+                }
+                else if (iter.name == "dayTimeHours")
                 {
                     EditorGUI.BeginDisabledGroup(!timeEnabled);
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.PropertyField(iter);
-                    int minutes = (720 + Mathf.RoundToInt(iter.floatValue * 720)) % 1440;
-                    EditorGUILayout.LabelField($"~{minutes / 60:00}:{minutes % 60:00}", GUILayout.Width(60));
-                    EditorGUILayout.EndHorizontal();
+                    if (rawTime)
+                    {
+                        EditorGUILayout.Slider(serializedObject.FindProperty("dayTime"), 0f, 1f, new GUIContent("Day Night T"));
+                    }
+                    else
+                    {
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.PropertyField(iter, new GUIContent("Day Time (24h)"));
+                        int minutes = Mathf.RoundToInt(Mathf.Max(0f, iter.floatValue) * 60) % 1440;
+                        EditorGUILayout.LabelField(iter.floatValue >= 0 ? $"{minutes / 60:00}:{minutes % 60:00}" : "legacy", GUILayout.Width(60));
+                        EditorGUILayout.EndHorizontal();
+                        if (timeEnabled && iter.floatValue < 0)
+                            EditorGUILayout.HelpBox("Still exporting the old 0-1 time value. Move the slider to author the time as a 24h clock instead.", MessageType.Info);
+                    }
                     EditorGUI.EndDisabledGroup();
                 }
                 else if (iter.name == "sunAngle")
@@ -106,10 +129,11 @@ namespace Jibbers.MapTools
         [SerializeField] Vector3 camStartPosition;
         [SerializeField] bool allowBackgroundMountains = true;
 
-        [Header("Time of Day")]
         [SerializeField] bool overrideTime;
-        [Range(0, 1)] public float dayTime;
+        [SerializeField] bool rawTime;
+        [Range(0, 24)] public float dayTimeHours = -1;
         [Range(0, 360)] public float sunAngle;
+        [HideInInspector] public float dayTime;
 
         [Header("Terrain Chunks")]
         public List<MapTerrainChunk> chunks;
@@ -320,6 +344,10 @@ namespace Jibbers.MapTools
                         canRotate        = obj.canRotate,
                         canMagnetize     = obj.canMagnetize,
                         intendedUpMethod = obj.intendedUpMethod,
+                        disableDistanceCulling = obj.disableDistanceCulling,
+                        timedVisibility  = obj.timedVisibility,
+                        visibleFromHour  = obj.visibleFromHour,
+                        visibleUntilHour = obj.visibleUntilHour,
                         position  = root.position,
                         rotation  = root.rotation.eulerAngles,
                         scale     = root.lossyScale,
@@ -357,6 +385,7 @@ namespace Jibbers.MapTools
                 allowBackgroundMountains = allowBackgroundMountains,
                 overrideTime = overrideTime,
                 dayTime = dayTime,
+                dayTimeHours = rawTime ? -1 : dayTimeHours,
                 sunAngle = sunAngle,
                 chunks = chunkDatas,
                 spawnPoints = spawnPoints.Select(s => new SpawnPointData(s)).ToArray(),
@@ -844,6 +873,8 @@ namespace Jibbers.MapTools
             allowBackgroundMountains = map.allowBackgroundMountains;
             overrideTime = map.overrideTime;
             dayTime = map.dayTime;
+            dayTimeHours = map.dayTimeHours;
+            rawTime = map.overrideTime && map.dayTimeHours < 0;
             sunAngle = map.sunAngle;
             chunks = importedChunks;
         }
@@ -863,12 +894,13 @@ namespace Jibbers.MapTools
 
                 var material = terrain.materialTemplate;
                 chunk.snowMask = material != null ? material.GetTexture("_SnowMask") as Texture2D : null;
+                chunk.snowMask2 = material != null && material.HasProperty("_SnowMask2") ? material.GetTexture("_SnowMask2") as Texture2D : null;
 
                 var child = terrain.transform.childCount > 0 ? terrain.transform.GetChild(0) : null;
                 if(child && child.name.ToLower().Contains("objects"))
                     chunk.mapObjectContainer = child;
 
-                Log($"  Chunk '{terrain.name}': snowMask={chunk.snowMask?.name ?? "none"}, objectContainer={chunk.mapObjectContainer?.name ?? "none"}");
+                Log($"  Chunk '{terrain.name}': snowMask={chunk.snowMask?.name ?? "none"}, snowMask2={chunk.snowMask2?.name ?? "none"}, objectContainer={chunk.mapObjectContainer?.name ?? "none"}");
                 chunks.Add(chunk);
             }
 

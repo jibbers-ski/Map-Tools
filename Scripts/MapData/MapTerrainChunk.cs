@@ -15,6 +15,7 @@ namespace Jibbers.MapTools
 
         [Header("Masks")]
         public Texture2D snowMask;
+        public Texture2D snowMask2;
 
         [Header("Repeats")]
         public int repeats = 1;
@@ -36,6 +37,7 @@ namespace Jibbers.MapTools
 
         public TextureData snowMaskData;
         public bool snowMask4Channel;
+        public TextureData snowMask2Data;
 
         public int repeats;
         public Vector3 repeatOffset;
@@ -58,6 +60,10 @@ namespace Jibbers.MapTools
             if (snowMaskData != null)
                 snowMaskData.compression = 0;
 
+            snowMask2Data = chunk.snowMask2 ? new TextureData(chunk.snowMask2) : null;
+            if (snowMask2Data != null)
+                snowMask2Data.compression = 0;
+
             var mat = chunk.terrain.materialTemplate;
             snowMask4Channel = mat != null && mat.HasProperty("_SnowMask4Channel") && mat.GetFloat("_SnowMask4Channel") > 0.5f;
 
@@ -74,6 +80,7 @@ namespace Jibbers.MapTools
 
             SerializeTexture(serializer, "snow-mask", ref snowMaskData);
             snowMask4Channel = serializer.SerializeBool("snow-mask-4channel", snowMask4Channel);
+            SerializeTexture(serializer, "snow-mask-2", ref snowMask2Data);
 
             serializer.SerializeSerializableArray("objects", ref objects, () => new MapObjectData());
 

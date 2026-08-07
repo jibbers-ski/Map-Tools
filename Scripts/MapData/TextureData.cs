@@ -112,11 +112,11 @@ namespace Jibbers.MapTools
             data = serializer.SerializeBytes("data", data);
         }
 
-        public Texture2D GetTexture()
+        public Texture2D GetTexture(bool forceMips = false)
         {
             if (encoding == "png")
             {
-                var texture = new Texture2D(2, 2, TextureFormat.RGBA32, mipmaps, isLinear);
+                var texture = new Texture2D(2, 2, TextureFormat.RGBA32, mipmaps || forceMips, isLinear);
                 texture.LoadImage(data, false);
                 if (compression > 0)
                     texture.Compress(compression >= 2);
