@@ -40,9 +40,14 @@ Shader "Custom/CustomObjectUnlit"
 
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             #pragma multi_compile_local _ _ALPHATEST_ON
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #if defined(LOD_FADE_CROSSFADE)
+                #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+            #endif
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -94,6 +99,10 @@ Shader "Custom/CustomObjectUnlit"
                     clip(baseSample.a - _Cutoff);
                 #endif
 
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
+                #endif
+
                 baseSample.rgb = MixFog(baseSample.rgb, input.fogFactor);
                 return baseSample;
             }
@@ -116,9 +125,14 @@ Shader "Custom/CustomObjectUnlit"
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             #pragma multi_compile_local _ _ALPHATEST_ON
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #if defined(LOD_FADE_CROSSFADE)
+                #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+            #endif
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -166,6 +180,10 @@ Shader "Custom/CustomObjectUnlit"
                     clip(baseSample.a - _Cutoff);
                 #endif
 
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
+                #endif
+
                 return 0;
             }
             ENDHLSL
@@ -186,9 +204,14 @@ Shader "Custom/CustomObjectUnlit"
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             #pragma multi_compile_local _ _ALPHATEST_ON
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #if defined(LOD_FADE_CROSSFADE)
+                #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+            #endif
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -234,6 +257,10 @@ Shader "Custom/CustomObjectUnlit"
                 #if defined(_ALPHATEST_ON)
                     half4 baseSample = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
                     clip(baseSample.a - _Cutoff);
+                #endif
+
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
                 #endif
 
                 return 0;

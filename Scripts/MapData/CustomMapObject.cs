@@ -12,6 +12,12 @@ namespace Jibbers.MapTools
         LocalBodyForwardProjected,
         PerBodyYUpZForward,
         PerBodyZUpYForward,
+        PerBodyYUpXForward,
+        PerBodyZUpXForward,
+        PerBodyXUpYForward,
+        PerBodyXUpZForward,
+        PerBodyRightProjected,
+        PerBodyForwardProjected,
     }
 
     public class CustomMapObject : MonoBehaviour
@@ -33,6 +39,18 @@ namespace Jibbers.MapTools
         public bool timedVisibility;
         public float visibleFromHour = 19f;
         public float visibleUntilHour = 6f;
+
+#if UNITY_EDITOR
+        void OnDrawGizmosSelected()
+        {
+            if (surfaceType != SurfaceType.Jib)
+                return;
+            var bodies = new List<JibIntentions.Body>();
+            foreach (var collider in GetComponentsInChildren<Collider>())
+                bodies.Add(JibIntentions.BodyOf(collider));
+            JibIntentions.DrawGizmos(intendedUpMethod, transform, bodies);
+        }
+#endif
     }
 
 #if UNITY_EDITOR
@@ -49,10 +67,11 @@ namespace Jibbers.MapTools
             if (obj.surfaceType == SurfaceType.Jib)
             {
                 UnityEditor.EditorGUILayout.Space(4);
-                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canStabilize"));
-                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canRotate"));
-                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canMagnetize"));
-                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("intendedUpMethod"));
+                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canStabilize"), new GUIContent("Can Stabilize", "The stabilizer aligns the skier to the intended frame while riding this jib."));
+                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canRotate"), new GUIContent("Can Rotate", "Off locks the skier's forward direction while on the jib (no surface swaps)."));
+                UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("canMagnetize"), new GUIContent("Can Magnetize", "Pull the skis sideways onto the intended position along the intended right axis."));
+                UnityEditor.EditorGUILayout.Space(4);
+                JibIntentions.MethodField(serializedObject.FindProperty("intendedUpMethod"));
             }
 
             UnityEditor.EditorGUILayout.PropertyField(serializedObject.FindProperty("disableDistanceCulling"));

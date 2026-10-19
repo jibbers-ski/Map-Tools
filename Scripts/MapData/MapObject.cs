@@ -68,6 +68,7 @@ namespace Jibbers.MapTools
         public Vector3 scale;
 
         public Dictionary<string,CustomParameter> parameters = new();
+        public LiftObjectData lift;
 
         public MapObjectData() {}
         public MapObjectData(MapObject mapObject)
@@ -80,6 +81,9 @@ namespace Jibbers.MapTools
             parameters = new();
             foreach(var parameter in mapObject.parameters)
                 parameters[parameter.name] = parameter.Clone();
+
+            if(mapObject.TryGetComponent(out LiftSetup liftSetup))
+                lift = liftSetup.ToData();
         }
 
         public void Serialize(ISerializer serializer)
@@ -92,6 +96,13 @@ namespace Jibbers.MapTools
 
             if (serializer.IsReader || !(parameters == null || parameters.Count == 0))
                 serializer.SerializeSerializableDict("parameters", ref parameters, s => new CustomParameter { name = s }, enterBlocks:false);
+
+            if (serializer.TryEnterBlock("lift", lift != null))
+            {
+                lift ??= new LiftObjectData();
+                lift.Serialize(serializer);
+                serializer.ExitBlock();
+            }
         }
 
     }

@@ -9,9 +9,16 @@ namespace Jibbers.MapTools
     public class MapData : ISerializable
     {
 
+        public const int MaxIdLength = 36;
+
         public string id;
         public string name;
         public string version = Utility.Version;
+        public string modVersion = "1.0";
+        public string author;
+        public string remixAuthors;
+        public string remixIds;
+        public float scale = 1;
 
         public MapTerrainChunkData[] chunks;
         public SpawnPointData[] spawnPoints;
@@ -29,11 +36,36 @@ namespace Jibbers.MapTools
 
         public bool headerOnly;
 
+        public static bool IsValidId(string id)
+            => !string.IsNullOrEmpty(id) && id.Length <= MaxIdLength
+                && id.All(c => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '-' or '_');
+
+        public static string IdFromName(string name)
+        {
+            var id = new System.Text.StringBuilder();
+            foreach(var c in (name ?? "").ToLowerInvariant())
+            {
+                if(c is (>= 'a' and <= 'z') or (>= '0' and <= '9'))
+                    id.Append(c);
+                else if(id.Length > 0 && id[id.Length - 1] != '-')
+                    id.Append('-');
+            }
+            var result = id.ToString();
+            if(result.Length > MaxIdLength)
+                result = result[..MaxIdLength];
+            return result.TrimEnd('-');
+        }
+
         public void Serialize(ISerializer serializer)
         {
             id = serializer.SerializeString("id", id);
             name = serializer.SerializeString("name", name);
             version = serializer.SerializeString("version", version);
+            modVersion = serializer.SerializeString("mod-version", modVersion);
+            author = serializer.SerializeString("author", author ?? "");
+            remixAuthors = serializer.SerializeString("remix-authors", remixAuthors ?? "");
+            remixIds = serializer.SerializeString("remix-ids", remixIds ?? "");
+            scale = serializer.SerializeFloat("scale", scale);
 
             camStartPosition = serializer.SerializeVector3("cam-start-position", camStartPosition);
             allowBackgroundMountains = serializer.SerializeBool("allow-background-mountains", allowBackgroundMountains);

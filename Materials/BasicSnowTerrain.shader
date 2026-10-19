@@ -39,9 +39,10 @@ Shader "Custom/BasicSnowTerrain"
             float _PaintView;
         CBUFFER_END
 
-        TEXTURE2D(_SnowMask); SAMPLER(sampler_SnowMask);
+        TEXTURE2D(_SnowMask);
         TEXTURE2D(_SnowMask2);
         SamplerState sampler_point_clamp;
+        SamplerState sampler_linear_clamp;
 
         struct Attributes
         {
@@ -125,7 +126,7 @@ Shader "Custom/BasicSnowTerrain"
             if (_DebugMode < 0.5 && _SnowMask4Channel > 0.5 && _ThirdFromAlpha > 0.5 && abs(_PowderMaxHeight) > 0.0001)
             {
                 float2 maskUv = float2(v.uv.x, 1 - v.uv.y);
-                float4 mask = SAMPLE_TEXTURE2D_LOD(_SnowMask, sampler_SnowMask, maskUv, 0);
+                float4 mask = SAMPLE_TEXTURE2D_LOD(_SnowMask, sampler_linear_clamp, maskUv, 0);
                 positionWS += normalWS * (saturate(mask.a) * mask.r * _PowderMaxHeight);
                 o.positionHCS = TransformWorldToHClip(positionWS);
             }
@@ -161,7 +162,7 @@ Shader "Custom/BasicSnowTerrain"
                     return float4(frac(i.uv), 0, 1);
 
                 float2 maskUv = float2(i.uv.x, 1 - i.uv.y);
-                float4 maskBilinear = SAMPLE_TEXTURE2D(_SnowMask, sampler_SnowMask, maskUv);
+                float4 maskBilinear = SAMPLE_TEXTURE2D(_SnowMask, sampler_linear_clamp, maskUv);
                 if (dbgMode == 4)
                     return float4(maskBilinear.rgb, 1);
                 if (dbgMode == 5)
@@ -172,29 +173,29 @@ Shader "Custom/BasicSnowTerrain"
                     return float4(HsvToRgb(frac(atan2(fd.x, fd.y) * 0.15915494309 + 1.0), 1.0, 1.0), 1.0);
                 }
 
-                // Paint highlight views (unlit, high-contrast; driven by the Better Terrain Editor).
                 int paintView = (int)(_PaintView + 0.5);
-                if (paintView == 1)
-                    return float4(lerp(float3(0.75, 0.08, 0.08), float3(1, 1, 1), maskBilinear.r), 1.0);
-                if (paintView == 2)
+                if (paintView > 0)
                 {
-                    float pvCover = _SnowMask4Channel > 0.5 ? maskBilinear.b : 0;
-                    float pvMark  = _SnowMask4Channel > 0.5 ? SAMPLE_TEXTURE2D_LOD(_SnowMask, sampler_point_clamp, maskUv, 0).g : 0;
-                    float pvSnapped = round(pvMark * 20.0) / 20.0;
-                    float3 pvBg = lerp(float3(0.12, 0.12, 0.12), float3(0.35, 0.35, 0.35), maskBilinear.r);
-                    float3 pvCol = (pvSnapped > 0 && pvSnapped < 1.0) ? HsvToRgb(pvSnapped, 1.0, 1.0) : pvBg;
-                    return float4(lerp(pvBg, pvCol, saturate(pvCover * 4.0)), 1.0);
-                }
-                if (paintView == 3)
-                {
-                    float pvDepth = PowderDepth(maskBilinear);
-                    float3 pvRamp = HsvToRgb((1.0 - saturate(pvDepth)) * 0.6667, 1.0, 1.0);
-                    return float4(pvDepth > 0.002 ? pvRamp : float3(0.07, 0.07, 0.07), 1.0);
-                }
-                if (paintView == 4)
-                {
+                    float pvShade = 0.55 + 0.45 * saturate(dot(N, GetMainLight().direction));
+                    if (paintView == 1)
+                        return float4(lerp(float3(0.75, 0.08, 0.08), float3(1, 1, 1), maskBilinear.r) * pvShade, 1.0);
+                    if (paintView == 2)
+                    {
+                        float pvCover = _SnowMask4Channel > 0.5 ? maskBilinear.b : 0;
+                        float pvMark  = _SnowMask4Channel > 0.5 ? SAMPLE_TEXTURE2D_LOD(_SnowMask, sampler_point_clamp, maskUv, 0).g : 0;
+                        float pvSnapped = round(pvMark * 20.0) / 20.0;
+                        float3 pvBg = lerp(float3(0.12, 0.12, 0.12), float3(0.35, 0.35, 0.35), maskBilinear.r);
+                        float3 pvCol = (pvSnapped > 0 && pvSnapped < 1.0) ? HsvToRgb(pvSnapped, 1.0, 1.0) : pvBg;
+                        return float4(lerp(pvBg, pvCol, saturate(pvCover * 4.0)) * pvShade, 1.0);
+                    }
+                    if (paintView == 3)
+                    {
+                        float pvDepth = PowderDepth(maskBilinear);
+                        float3 pvRamp = HsvToRgb((1.0 - saturate(pvDepth)) * 0.6667, 1.0, 1.0);
+                        return float4((pvDepth > 0.002 ? pvRamp : float3(0.07, 0.07, 0.07)) * pvShade, 1.0);
+                    }
                     float2 pvFd = SampleFlowDirSmooth(maskUv);
-                    return float4(HsvToRgb(frac(atan2(pvFd.x, pvFd.y) * 0.15915494309 + 1.0), 1.0, 1.0), 1.0);
+                    return float4(HsvToRgb(frac(atan2(pvFd.x, pvFd.y) * 0.15915494309 + 1.0), 1.0, 1.0) * pvShade, 1.0);
                 }
 
                 float snow = maskBilinear.r;

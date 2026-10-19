@@ -10,6 +10,7 @@ namespace Jibbers.MapTools
     public class MapTerrainChunk
     {
 
+        public bool export = true;
         public Terrain terrain;
         public Transform mapObjectContainer;
 
@@ -20,6 +21,8 @@ namespace Jibbers.MapTools
         [Header("Repeats")]
         public int repeats = 1;
         public Vector3 repeatOffset;
+        [Tooltip("Editor only: render ghost copies of this terrain at the repeat offsets to check the seams without duplicating it. Not exported.")]
+        public bool previewRepeats;
 
     }
 

@@ -4,23 +4,10 @@ Unity package for creating jibbers maps.
 
 ## Installation
 
-### IF YOU HAD THE PREVIOUS TEMPLATE (.zip) DO THIS FIRST:
+**Requires:** Unity 6+ with URP
 
-1. Close Unity
-2. **Backup your Project!**
-3. Go to your project's `Assets/` folder and delete:
-    - `Materials/` folder and `Materials.meta`
-    - `Scripts/` folder and `Scripts.meta`
-    - `Resources/` folder and `Resources.meta`
-
-### Installing the Package
-
-1. Download the whole project folder (zip or clone)
-2. Unpack and drop the `Map-Tools` folder into your project's `Packages/` folder
-3. Make sure the folder is called `fun.jibbers.map-tools`
-4. Open your project in Unity
-
-**Requires:** Unity 6+, Newtonsoft JSON (`com.unity.nuget.newtonsoft-json`)
+- **Package Manager:** Window > Package Manager > + > Add package from git URL, paste this repository's URL
+- **Manually:** download or clone this repository into your project's `Packages/` folder and name the folder `fun.jibbers.map-tools`
 
 ## Terrain Editor
 

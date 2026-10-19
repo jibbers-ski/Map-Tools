@@ -53,7 +53,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bf5699b66c8338c49a83470ff04249fd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: fun.jibbers.map-tools::Jibbers.MapTools.MapObject
-  parameters: []
+  parameters:
+  - name: light-color
+    type: 6
+    intValue: 0
+    floatValue: 0
+    boolValue: 0
+    stringValue: '#FFFFFF'
+    optionsString: 
+  - name: light-intensity
+    type: 2
+    intValue: 0
+    floatValue: 1
+    boolValue: 0
+    stringValue: 
+    optionsString: 
   id: floodlight
   forceUniformScale: 0
 --- !u!1 &1598291397847809087

@@ -28,6 +28,7 @@ namespace Jibbers.MapTools
     public class MapExporterEditor : Editor
     {
         bool autoImportArmed;
+        bool streamingExportArmed;
 
         public override void OnInspectorGUI()
         {
@@ -38,7 +39,36 @@ namespace Jibbers.MapTools
             iter.NextVisible(true);
             while (iter.NextVisible(false))
             {
-                if (iter.name == "overrideTime")
+                if (iter.name == "idOverride")
+                {
+                    EditorGUILayout.PropertyField(iter, new GUIContent("Id", "Letters, digits, '-' and '_' only, at most 36 characters. Leave empty to derive it from the map name on export ('Super Lake Park' becomes 'super-lake-park'). Changing it later makes the game treat the export as a different map."));
+                    var fromName = MapData.IdFromName(serializedObject.FindProperty("mapName").stringValue);
+                    if (iter.stringValue.Length == 0)
+                        EditorGUILayout.HelpBox("Exports as " + (fromName == "" ? "a generated id" : "'" + fromName + "'"), MessageType.None);
+                    else if (!MapData.IsValidId(iter.stringValue))
+                    {
+                        EditorGUILayout.HelpBox("Invalid id: only letters, digits, '-' and '_' are allowed, at most " + MapData.MaxIdLength + " characters. The map will not export.", MessageType.Error);
+                        if (GUILayout.Button("Use Name As Id"))
+                            iter.stringValue = fromName == "" ? Utility.NewGuid : fromName;
+                    }
+                }
+                else if (iter.name == "modVersion")
+                    EditorGUILayout.PropertyField(iter, new GUIContent("Map Version", "The map's own version, sent to mod.io on upload. Export with a higher one before uploading an update."));
+                else if (iter.name == "author")
+                    EditorGUILayout.PropertyField(iter, new GUIContent("Author", "Your name as the map's creator. Stays on every remix of the map."));
+                else if (iter.name == "remixAuthors")
+                {
+#if JIBBERS_MAPTOOLS_INTERNAL
+                    EditorGUILayout.PropertyField(iter, new GUIContent("Remix Authors", "Everyone who saved a remix of this map in-game, oldest first, separated by '>'. Filled in by the game, keep it to credit them."));
+#endif
+                }
+                else if (iter.name == "remixIds")
+                {
+#if JIBBERS_MAPTOOLS_INTERNAL
+                    EditorGUILayout.PropertyField(iter, new GUIContent("Remix Ids", "The ids this map went through as it was remixed, from the original map to this one, separated by '>'. Filled in by the game."));
+#endif
+                }
+                else if (iter.name == "overrideTime")
                 {
                     EditorGUILayout.Space(8);
                     EditorGUILayout.LabelField("Time of Day", EditorStyles.boldLabel);
@@ -115,6 +145,228 @@ namespace Jibbers.MapTools
 
             if (GUILayout.Button("Export"))
                 exporter.Export();
+
+#if JIBBERS_MAPTOOLS_INTERNAL
+            if (!streamingExportArmed)
+            {
+                if (GUILayout.Button("Export to StreamingAssets"))
+                    streamingExportArmed = true;
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("This will write the map into this project's StreamingAssets/Maps/ folder.", MessageType.Warning);
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Confirm"))
+                {
+                    exporter.Export(Application.streamingAssetsPath + "/Maps/");
+                    AssetDatabase.Refresh();
+                    streamingExportArmed = false;
+                }
+                if (GUILayout.Button("Cancel"))
+                    streamingExportArmed = false;
+                EditorGUILayout.EndHorizontal();
+            }
+#endif
+
+            MapExporterRepeatPreview.Poke();
+        }
+    }
+
+    [InitializeOnLoad]
+    public static class MapExporterRepeatPreview
+    {
+        const string Prefix = "[RepeatPreview]";
+        const int MaxGhosts = 32;
+
+        class Ghost
+        {
+            public Terrain source;
+            public Terrain terrain;
+            public int index;
+        }
+
+        static readonly List<Ghost> ghosts = new List<Ghost>();
+        static double nextPoll;
+        static bool warnedCap;
+
+        static MapExporterRepeatPreview()
+        {
+            EditorApplication.update += Poll;
+            EditorApplication.playModeStateChanged += s =>
+            {
+                if (s == PlayModeStateChange.ExitingEditMode)
+                    Clear();
+            };
+            EditorApplication.delayCall += CleanupOrphans;
+        }
+
+        public static void Poke() => nextPoll = 0;
+
+        static void CleanupOrphans()
+        {
+            foreach (var t in Resources.FindObjectsOfTypeAll<Terrain>())
+            {
+                if (t == null || !t.gameObject.name.StartsWith(Prefix)) continue;
+                if (EditorUtility.IsPersistent(t.gameObject)) continue;
+                bool tracked = false;
+                foreach (var g in ghosts)
+                    if (g.terrain == t) { tracked = true; break; }
+                if (!tracked)
+                    UnityEngine.Object.DestroyImmediate(t.gameObject);
+            }
+        }
+
+        static void Clear()
+        {
+            foreach (var g in ghosts)
+                if (g.source != null)
+                    g.source.SetNeighbors(Strip(g.source.leftNeighbor), Strip(g.source.topNeighbor),
+                        Strip(g.source.rightNeighbor), Strip(g.source.bottomNeighbor));
+            foreach (var g in ghosts)
+                if (g.terrain != null)
+                    UnityEngine.Object.DestroyImmediate(g.terrain.gameObject);
+            ghosts.Clear();
+        }
+
+        static Terrain Strip(Terrain t)
+        {
+            if (t == null) return null;
+            foreach (var g in ghosts)
+                if (g.terrain == t)
+                    return null;
+            return t;
+        }
+
+        static void Poll()
+        {
+            if (EditorApplication.timeSinceStartup < nextPoll) return;
+            nextPoll = EditorApplication.timeSinceStartup + 0.5;
+
+            if (Application.isPlaying)
+            {
+                if (ghosts.Count > 0) Clear();
+                return;
+            }
+
+            var desired = new List<(MapTerrainChunk chunk, int index)>();
+            foreach (var exporter in UnityEngine.Object.FindObjectsByType<MapExporter>(FindObjectsSortMode.None))
+            {
+                if (exporter.chunks == null) continue;
+                foreach (var chunk in exporter.chunks)
+                {
+                    if (!chunk.previewRepeats || chunk.terrain == null || chunk.repeats < 2) continue;
+                    for (int k = 1; k < chunk.repeats && desired.Count < MaxGhosts; k++)
+                        desired.Add((chunk, k));
+                }
+            }
+
+            if (desired.Count >= MaxGhosts && !warnedCap)
+            {
+                warnedCap = true;
+                Debug.LogWarning($"[MapExporter] Repeat preview is capped at {MaxGhosts} ghost terrains.");
+            }
+            if (desired.Count < MaxGhosts)
+                warnedCap = false;
+
+            bool structural = desired.Count != ghosts.Count;
+            if (!structural)
+                for (int i = 0; i < desired.Count; i++)
+                    if (ghosts[i].terrain == null || ghosts[i].source != desired[i].chunk.terrain || ghosts[i].index != desired[i].index)
+                    {
+                        structural = true;
+                        break;
+                    }
+
+            if (structural)
+            {
+                Clear();
+                foreach (var (chunk, index) in desired)
+                    ghosts.Add(CreateGhost(chunk.terrain, index));
+            }
+
+            for (int i = 0; i < ghosts.Count; i++)
+                Sync(ghosts[i], desired[i].chunk);
+            for (int i = 0; i < ghosts.Count; i++)
+                WireNeighbors(ghosts[i], desired[i].chunk);
+        }
+
+        static Ghost CreateGhost(Terrain source, int index)
+        {
+            var go = Terrain.CreateTerrainGameObject(source.terrainData);
+            go.name = $"{Prefix} {source.name} +{index}";
+            go.hideFlags = HideFlags.HideAndDontSave;
+            go.layer = source.gameObject.layer;
+            if (go.scene != source.gameObject.scene)
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(go, source.gameObject.scene);
+            var collider = go.GetComponent<TerrainCollider>();
+            if (collider != null)
+                collider.enabled = false;
+            return new Ghost { source = source, terrain = go.GetComponent<Terrain>(), index = index };
+        }
+
+        static void Sync(Ghost ghost, MapTerrainChunk chunk)
+        {
+            if (ghost.terrain == null || ghost.source == null) return;
+            var src = ghost.source;
+            var dst = ghost.terrain;
+            dst.transform.position = src.transform.position + chunk.repeatOffset * ghost.index;
+            if (dst.terrainData != src.terrainData)
+                dst.terrainData = src.terrainData;
+            dst.materialTemplate = src.materialTemplate;
+            dst.drawInstanced = src.drawInstanced;
+            dst.heightmapPixelError = src.heightmapPixelError;
+            dst.basemapDistance = src.basemapDistance;
+            dst.shadowCastingMode = src.shadowCastingMode;
+            dst.drawTreesAndFoliage = src.drawTreesAndFoliage;
+            dst.treeDistance = src.treeDistance;
+            dst.treeBillboardDistance = src.treeBillboardDistance;
+            dst.treeCrossFadeLength = src.treeCrossFadeLength;
+            dst.treeLODBiasMultiplier = src.treeLODBiasMultiplier;
+        }
+
+        static void WireNeighbors(Ghost g, MapTerrainChunk chunk)
+        {
+            if (g.terrain == null || g.source == null) return;
+            int step = CleanAxisStep(chunk.repeatOffset, g.source.terrainData.size);
+            if (step == 0)
+            {
+                g.terrain.SetNeighbors(null, null, null, null);
+                return;
+            }
+            var prev = g.index == 1 ? g.source : FindGhost(g.source, g.index - 1);
+            var next = FindGhost(g.source, g.index + 1);
+            switch (step)
+            {
+                case  1: g.terrain.SetNeighbors(prev, null, next, null); break;
+                case -1: g.terrain.SetNeighbors(next, null, prev, null); break;
+                case  2: g.terrain.SetNeighbors(null, next, null, prev); break;
+                default: g.terrain.SetNeighbors(null, prev, null, next); break;
+            }
+            if (g.index != 1) return;
+            var s = g.source;
+            switch (step)
+            {
+                case  1: s.SetNeighbors(s.leftNeighbor, s.topNeighbor, g.terrain, s.bottomNeighbor); break;
+                case -1: s.SetNeighbors(g.terrain, s.topNeighbor, s.rightNeighbor, s.bottomNeighbor); break;
+                case  2: s.SetNeighbors(s.leftNeighbor, g.terrain, s.rightNeighbor, s.bottomNeighbor); break;
+                default: s.SetNeighbors(s.leftNeighbor, s.topNeighbor, s.rightNeighbor, g.terrain); break;
+            }
+        }
+
+        static Terrain FindGhost(Terrain source, int index)
+        {
+            foreach (var g in ghosts)
+                if (g.source == source && g.index == index)
+                    return g.terrain;
+            return null;
+        }
+
+        static int CleanAxisStep(Vector3 off, Vector3 size)
+        {
+            const float eps = 0.01f;
+            if (Mathf.Abs(Mathf.Abs(off.x) - size.x) < eps && Mathf.Abs(off.z) < eps) return off.x > 0 ? 1 : -1;
+            if (Mathf.Abs(Mathf.Abs(off.z) - size.z) < eps && Mathf.Abs(off.x) < eps) return off.z > 0 ? 2 : -2;
+            return 0;
         }
     }
     #endif
@@ -123,11 +375,16 @@ namespace Jibbers.MapTools
     {
         [SerializeField] string mapName = "Cool Map Name";
         [SerializeField] string idOverride;
+        [SerializeField] string modVersion = "1.0";
+        [SerializeField] string author;
+        [SerializeField] string remixAuthors;
+        [SerializeField] string remixIds;
         public bool autoExportOnAwake;
 
         [Header("Misc")]
         [SerializeField] Vector3 camStartPosition;
         [SerializeField] bool allowBackgroundMountains = true;
+        [SerializeField, Range(0.1f, 3f)] float scale = 1;
 
         [SerializeField] bool overrideTime;
         [SerializeField] bool rawTime;
@@ -154,7 +411,7 @@ namespace Jibbers.MapTools
 
         void Log(string msg) { if (enableLogs) Debug.Log($"[MapExporter] {msg}"); }
 
-        public void Export()
+        public void Export(string outputDir = null)
         {
             s_timeMeshPack = 0;
             s_timeTextureEncode = 0;
@@ -164,9 +421,27 @@ namespace Jibbers.MapTools
 
             var spawnPoints = GetComponentsInChildren<MapSpawnPoint>();
             if(string.IsNullOrEmpty(idOverride))
-                idOverride = Utility.NewGuid;
+            {
+#if UNITY_EDITOR
+                UnityEditor.Undo.RecordObject(this, "Derive Map Id");
+#endif
+                idOverride = MapData.IdFromName(mapName);
+                if(string.IsNullOrEmpty(idOverride))
+                    idOverride = Utility.NewGuid;
+            }
+            if(!MapData.IsValidId(idOverride))
+            {
+                Debug.LogError($"[MapExporter] Not exporting '{mapName}': the id '{idOverride}' may only contain letters, digits, '-' and '_' and at most {MapData.MaxIdLength} characters.");
+                return;
+            }
+            if(string.IsNullOrWhiteSpace(modVersion))
+                modVersion = "1.0";
 
-            Log($"Exporting '{mapName}' (id: {idOverride}) — {chunks.Count} chunk(s), {spawnPoints.Length} spawn point(s)");
+            var exportChunks = chunks.Where(c => c.export && c.terrain.gameObject.activeInHierarchy).ToList();
+            foreach (var c in chunks.Except(exportChunks))
+                Debug.Log($"[MapExporter] Skipping chunk '{c.terrain.name}' ({(c.export ? "terrain inactive" : "export unticked")})");
+
+            Log($"Exporting '{mapName}' (id: {idOverride}) — {exportChunks.Count} chunk(s), {spawnPoints.Length} spawn point(s)");
 
             bool hasScaleError = false;
             foreach (var obj in GetComponentsInChildren<MapObject>())
@@ -202,18 +477,18 @@ namespace Jibbers.MapTools
             var meshLibrary    = new Dictionary<string, MeshData>();
             var textureLibrary = new Dictionary<string, TextureData>();
 
-            var chunkDatas = new MapTerrainChunkData[chunks.Count];
-            for (int i = 0; i < chunks.Count; i++)
+            var chunkDatas = new MapTerrainChunkData[exportChunks.Count];
+            for (int i = 0; i < exportChunks.Count; i++)
             {
-                Log($"Chunk {i}: terrain '{chunks[i].terrain.name}', heightmap {chunks[i].terrain.terrainData.heightmapResolution}");
+                Log($"Chunk {i}: terrain '{exportChunks[i].terrain.name}', heightmap {exportChunks[i].terrain.terrainData.heightmapResolution}");
                 var metaSw = System.Diagnostics.Stopwatch.StartNew();
-                chunkDatas[i] = new MapTerrainChunkData(chunks[i]);
+                chunkDatas[i] = new MapTerrainChunkData(exportChunks[i]);
                 s_timeChunkMeta += metaSw.ElapsedMilliseconds;
 
                 var customObjs = new List<CustomMapObjectData>();
-                var found = new HashSet<CustomMapObject>(chunks[i].terrain.GetComponentsInChildren<CustomMapObject>());
-                if (chunks[i].mapObjectContainer != null)
-                    foreach (var o in chunks[i].mapObjectContainer.GetComponentsInChildren<CustomMapObject>())
+                var found = new HashSet<CustomMapObject>(exportChunks[i].terrain.GetComponentsInChildren<CustomMapObject>());
+                if (exportChunks[i].mapObjectContainer != null)
+                    foreach (var o in exportChunks[i].mapObjectContainer.GetComponentsInChildren<CustomMapObject>())
                         found.Add(o);
 
                 Log($"  Found {found.Count} CustomMapObject(s) in chunk {i}");
@@ -359,7 +634,7 @@ namespace Jibbers.MapTools
                 }
 
                 chunkDatas[i].customObjects = customObjs.Count > 0 ? customObjs.ToArray() : null;
-                ExtractTrees(chunks[i].terrain, chunkDatas[i], meshLibrary, textureLibrary);
+                ExtractTrees(exportChunks[i].terrain, chunkDatas[i], meshLibrary, textureLibrary);
             }
 
             Log($"Libraries: {meshLibrary.Count} mesh(es), {textureLibrary.Count} texture(s)");
@@ -381,8 +656,13 @@ namespace Jibbers.MapTools
             var map = new MapData() {
                 name = mapName,
                 id = idOverride,
+                modVersion = modVersion.Trim(),
+                author = author?.Trim(),
+                remixAuthors = remixAuthors?.Trim(),
+                remixIds = remixIds?.Trim(),
                 camStartPosition = camStartPosition,
                 allowBackgroundMountains = allowBackgroundMountains,
+                scale = scale,
                 overrideTime = overrideTime,
                 dayTime = dayTime,
                 dayTimeHours = rawTime ? -1 : dayTimeHours,
@@ -401,7 +681,7 @@ namespace Jibbers.MapTools
             long serializeMs = sw.ElapsedMilliseconds - phaseStart;
             phaseStart = sw.ElapsedMilliseconds;
 
-            var dirPath = Utility.DataPath + "Maps/";
+            var dirPath = outputDir ?? Utility.DataPath + "Maps/";
             Directory.CreateDirectory(dirPath);
 
             var filePath = dirPath + map.id + ".jbrmap";
@@ -869,8 +1149,13 @@ namespace Jibbers.MapTools
         {
             mapName = map.name;
             idOverride = map.id;
+            modVersion = map.modVersion;
+            author = map.author;
+            remixAuthors = map.remixAuthors;
+            remixIds = map.remixIds;
             camStartPosition = map.camStartPosition;
             allowBackgroundMountains = map.allowBackgroundMountains;
+            scale = map.scale;
             overrideTime = map.overrideTime;
             dayTime = map.dayTime;
             dayTimeHours = map.dayTimeHours;

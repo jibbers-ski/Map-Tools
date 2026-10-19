@@ -65,6 +65,16 @@ Shader "Custom/CustomObjectLit"
         _WindRadialMax ("Wind Radial Max", Float) = 1
         _WindRadialExponent ("Wind Radial Exponent", Range(0.25,8)) = 1
         _WindCrossSway ("Wind Cross Sway", Range(0,1)) = 0
+
+        [HideInInspector] _UseMovingParts ("__use_moving_parts", Float) = 0
+        _MoveAutoSpeed ("Motion Auto Speed", Float) = 0
+        _MoveDrive ("Motion Drive", Float) = 0
+
+        [Space(10)]
+        _UvScroll ("UV Scroll", Vector) = (0,0,0,0)
+        _EmissionPulse ("Emission Pulse", Range(0,1)) = 0
+        _EmissionPulseSpeed ("Emission Pulse Speed", Float) = 1
+        _EmissionFlicker ("Emission Flicker", Range(0,1)) = 0
     }
 
     SubShader
@@ -78,6 +88,9 @@ Shader "Custom/CustomObjectLit"
 
         HLSLINCLUDE
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #if defined(LOD_FADE_CROSSFADE)
+                #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
+            #endif
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseMap_ST;
@@ -118,6 +131,12 @@ Shader "Custom/CustomObjectLit"
                 float _WindRadialMax;
                 float _WindRadialExponent;
                 float _WindCrossSway;
+                float _MoveAutoSpeed;
+                float _MoveDrive;
+                float4 _UvScroll;
+                float _EmissionPulse;
+                float _EmissionPulseSpeed;
+                float _EmissionFlicker;
             CBUFFER_END
 
             float3 WindSwayOffset(float3 positionWS, float3 positionOS)
@@ -150,6 +169,49 @@ Shader "Custom/CustomObjectLit"
 
                 return (windDir * sway + crossDir * crossSway * _WindCrossSway) * (_WindStrength * mask);
             }
+
+            float3 MovingPartsAxisWS(float2 yawPitch)
+            {
+                float sy, cy, sp, cp;
+                sincos(yawPitch.x, sy, cy);
+                sincos(yawPitch.y, sp, cp);
+                return normalize(mul((float3x3) GetObjectToWorldMatrix(), float3(cp * sy, sp, cp * cy)));
+            }
+
+            float MovingPartsBand(float encoded)
+            {
+                float magnitude = abs(encoded);
+                return magnitude > 500000.0 ? floor(magnitude * 0.000001) : 0.0;
+            }
+
+            float MovingPartsCycle(float encoded, float band, float4 color)
+            {
+                float cycles = sign(encoded) * (abs(encoded) - band * 1000000.0) * 0.001;
+                float phase = band > 1.5 ? color.g : 0.0;
+                return frac((_MoveDrive + _Time.y * _MoveAutoSpeed) * cycles + phase) * 6.28318530718;
+            }
+
+            float3 MovingPartsRotate(float3 vectorWS, float2 uv3, float2 uv4, float4 color)
+            {
+                float band = MovingPartsBand(uv3.y);
+                if (band < 0.5 || band > 2.5) return vectorWS;
+                float angle = MovingPartsCycle(uv3.y, band, color);
+                if (band > 1.5) angle = color.r * 3.14159265359 * sin(angle);
+                float3 axis = MovingPartsAxisWS(uv4);
+                float s, c;
+                sincos(angle, s, c);
+                return vectorWS * c + cross(axis, vectorWS) * s + axis * dot(axis, vectorWS) * (1.0 - c);
+            }
+
+            float3 MovingPartsPosition(float3 positionOS, float2 uv2, float2 uv3, float2 uv4, float4 color)
+            {
+                float band = MovingPartsBand(uv3.y);
+                if (band > 2.5)
+                    return TransformObjectToWorld(positionOS) + MovingPartsAxisWS(uv4) * (color.r * 2.5 * sin(MovingPartsCycle(uv3.y, band, color)));
+                float3 pivotOS = float3(uv2, uv3.x);
+                float3 offsetWS = mul((float3x3) GetObjectToWorldMatrix(), positionOS - pivotOS);
+                return TransformObjectToWorld(pivotOS) + MovingPartsRotate(offsetWS, uv3, uv4, color);
+            }
         ENDHLSL
 
         Pass
@@ -179,6 +241,8 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
 
             #pragma multi_compile_fragment _ DEBUG_DISPLAY
 
@@ -188,6 +252,7 @@ Shader "Custom/CustomObjectLit"
             #pragma multi_compile_local _ _OVERLAY_FADE
             #pragma multi_compile_local _ _LIQUID
             #pragma multi_compile_local_vertex _ _WIND_SWAY
+            #pragma multi_compile_local_vertex _ _MOVING_PARTS
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Debug/Debugging3D.hlsl"
@@ -253,6 +318,12 @@ Shader "Custom/CustomObjectLit"
                 float3 normalOS   : NORMAL;
                 float4 tangentOS  : TANGENT;
                 float2 uv         : TEXCOORD0;
+                #if defined(_MOVING_PARTS)
+                    float2 uv2    : TEXCOORD1;
+                    float2 uv3    : TEXCOORD2;
+                    float2 uv4    : TEXCOORD3;
+                    float4 color  : COLOR;
+                #endif
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -283,6 +354,13 @@ Shader "Custom/CustomObjectLit"
                 VertexPositionInputs posInputs = GetVertexPositionInputs(input.positionOS.xyz);
                 VertexNormalInputs normInputs  = GetVertexNormalInputs(input.normalOS, input.tangentOS);
 
+                #if defined(_MOVING_PARTS)
+                    posInputs.positionWS = MovingPartsPosition(input.positionOS.xyz, input.uv2, input.uv3, input.uv4, input.color);
+                    posInputs.positionCS = TransformWorldToHClip(posInputs.positionWS);
+                    normInputs.normalWS  = MovingPartsRotate(normInputs.normalWS, input.uv3, input.uv4, input.color);
+                    normInputs.tangentWS = MovingPartsRotate(normInputs.tangentWS, input.uv3, input.uv4, input.color);
+                #endif
+
                 #if defined(_WIND_SWAY)
                     posInputs.positionWS += WindSwayOffset(posInputs.positionWS, input.positionOS.xyz);
                     posInputs.positionCS = TransformWorldToHClip(posInputs.positionWS);
@@ -295,7 +373,7 @@ Shader "Custom/CustomObjectLit"
                 output.normalWS  = normInputs.normalWS;
                 output.tangentWS = half4(normInputs.tangentWS, input.tangentOS.w);
 
-                output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
+                output.uv = TRANSFORM_TEX(input.uv, _BaseMap) + _UvScroll.xy * _Time.y;
 
                 output.fogFactor = ComputeFogFactor(posInputs.positionCS.z);
 
@@ -325,6 +403,10 @@ Shader "Custom/CustomObjectLit"
 
                 #if defined(_ALPHATEST_ON)
                     clip(baseSample.a - _Cutoff);
+                #endif
+
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
                 #endif
 
                 half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
@@ -375,6 +457,9 @@ Shader "Custom/CustomObjectLit"
                 ZERO_INITIALIZE(SurfaceData, surfaceData);
 
                 half3 emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, input.uv).rgb * _EmissionColor.rgb;
+                float4x4 objectToWorld = GetObjectToWorldMatrix();
+                emission *= 1.0 - _EmissionPulse * (0.5 + 0.5 * sin(_Time.y * _EmissionPulseSpeed * 6.28318530718));
+                emission *= 1.0 - _EmissionFlicker * LiquidHash(float2(floor(_Time.y * 24.0), objectToWorld._m03 + objectToWorld._m23));
                 #if defined(_LIQUID)
                     half liquidFresnel = pow(1.0h - saturate(dot(finalNormalWS, inputData.viewDirectionWS)), _LiquidFresnelPower);
                     emission += liquidFresnel * _LiquidFresnelStrength;
@@ -415,8 +500,11 @@ Shader "Custom/CustomObjectLit"
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             #pragma multi_compile_local _ _ALPHATEST_ON
             #pragma multi_compile_local_vertex _ _WIND_SWAY
+            #pragma multi_compile_local_vertex _ _MOVING_PARTS
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -425,6 +513,12 @@ Shader "Custom/CustomObjectLit"
             {
                 float4 positionOS : POSITION;
                 float2 uv         : TEXCOORD0;
+                #if defined(_MOVING_PARTS)
+                    float2 uv2    : TEXCOORD1;
+                    float2 uv3    : TEXCOORD2;
+                    float2 uv4    : TEXCOORD3;
+                    float4 color  : COLOR;
+                #endif
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -444,11 +538,17 @@ Shader "Custom/CustomObjectLit"
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-                output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
+                output.uv = TRANSFORM_TEX(input.uv, _BaseMap) + _UvScroll.xy * _Time.y;
 
-                #if defined(_WIND_SWAY)
-                    float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
-                    positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                #if defined(_WIND_SWAY) || defined(_MOVING_PARTS)
+                    #if defined(_MOVING_PARTS)
+                        float3 positionWS = MovingPartsPosition(input.positionOS.xyz, input.uv2, input.uv3, input.uv4, input.color);
+                    #else
+                        float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                    #endif
+                    #if defined(_WIND_SWAY)
+                        positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                    #endif
                     output.positionCS = TransformWorldToHClip(positionWS);
                 #else
                     output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
@@ -465,6 +565,10 @@ Shader "Custom/CustomObjectLit"
                 #if defined(_ALPHATEST_ON)
                     half4 baseSample = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
                     clip(baseSample.a - _Cutoff);
+                #endif
+
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
                 #endif
 
                 return 0;
@@ -490,8 +594,11 @@ Shader "Custom/CustomObjectLit"
             #pragma fragment frag
 
             #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             #pragma multi_compile_local _ _ALPHATEST_ON
             #pragma multi_compile_local_vertex _ _WIND_SWAY
+            #pragma multi_compile_local_vertex _ _MOVING_PARTS
 
             TEXTURE2D(_BaseMap);
             SAMPLER(sampler_BaseMap);
@@ -500,6 +607,12 @@ Shader "Custom/CustomObjectLit"
             {
                 float4 positionOS : POSITION;
                 float2 uv         : TEXCOORD0;
+                #if defined(_MOVING_PARTS)
+                    float2 uv2    : TEXCOORD1;
+                    float2 uv3    : TEXCOORD2;
+                    float2 uv4    : TEXCOORD3;
+                    float4 color  : COLOR;
+                #endif
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -518,11 +631,17 @@ Shader "Custom/CustomObjectLit"
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-                output.uv = TRANSFORM_TEX(input.uv, _BaseMap);
+                output.uv = TRANSFORM_TEX(input.uv, _BaseMap) + _UvScroll.xy * _Time.y;
 
-                #if defined(_WIND_SWAY)
-                    float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
-                    positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                #if defined(_WIND_SWAY) || defined(_MOVING_PARTS)
+                    #if defined(_MOVING_PARTS)
+                        float3 positionWS = MovingPartsPosition(input.positionOS.xyz, input.uv2, input.uv3, input.uv4, input.color);
+                    #else
+                        float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                    #endif
+                    #if defined(_WIND_SWAY)
+                        positionWS += WindSwayOffset(positionWS, input.positionOS.xyz);
+                    #endif
                     output.positionCS = TransformWorldToHClip(positionWS);
                 #else
                     output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
@@ -539,6 +658,10 @@ Shader "Custom/CustomObjectLit"
                 #if defined(_ALPHATEST_ON)
                     half4 baseSample = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
                     clip(baseSample.a - _Cutoff);
+                #endif
+
+                #if defined(LOD_FADE_CROSSFADE)
+                    LODFadeCrossFade(input.positionCS);
                 #endif
 
                 return 0;

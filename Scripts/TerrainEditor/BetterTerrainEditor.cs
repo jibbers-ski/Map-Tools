@@ -1291,6 +1291,7 @@ namespace Jibbers.MapTools
             int resolution = editor.terrain.terrainData.heightmapResolution;
             var tex = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false, true);
             tex.name = editor.terrain.name + "_SnowMask";
+            tex.wrapMode = TextureWrapMode.Clamp;
 
             var pixels = new Color[resolution * resolution];
             for (int i = 0; i < pixels.Length; i++)
@@ -1328,6 +1329,7 @@ namespace Jibbers.MapTools
             // in Linear color space (angles decode nonlinearly; broke flow for half the circle).
             var tex = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false, true);
             tex.name = editor.terrain.name + "_SnowMask2";
+            tex.wrapMode = TextureWrapMode.Clamp;
 
             var pixels = new Color[resolution * resolution];
             for (int i = 0; i < pixels.Length; i++)

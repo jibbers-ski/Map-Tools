@@ -26,6 +26,8 @@ float crossSectionSideFlatten;
 float edgeBlend;
 float edgeFalloff;
 int   edgeBlendMode; // 0 = All, 1 = Sides (left/right), 2 = Ends (front/back)
+float startBlend;
+float endBlend;
 
 StructuredBuffer<float> BakedTilt;
 int bakedTiltRes;
@@ -123,6 +125,16 @@ void Curve(uint3 id : SV_DispatchThreadID)
     else
     {
         blend = 1.0;
+    }
+    if (startBlend > 0)
+    {
+        float u = saturate(ly / startBlend);
+        blend *= u * u * (3.0 - 2.0 * u);
+    }
+    if (endBlend > 0)
+    {
+        float u = saturate((segLen - ly) / endBlend);
+        blend *= u * u * (3.0 - 2.0 * u);
     }
 
     float original = Heightmap[int2(x, y)];

@@ -51,6 +51,13 @@ namespace Jibbers.MapTools
             DrawReadWriteWarning(normalMap);
             editor.TexturePropertySingleLine(new GUIContent("Emission", "Self-illumination: texture multiplied by the HDR color. Black color = no emission."),  emissionMap, emissionColor);
             DrawReadWriteWarning(emissionMap);
+            editor.ShaderProperty(FindProperty("_EmissionPulse", props),      new GUIContent("Emission Pulse", "How deep the emission dims and brightens in a smooth cycle. 0 = steady."));
+            editor.ShaderProperty(FindProperty("_EmissionPulseSpeed", props), new GUIContent("Pulse Speed", "Pulse cycles per second."));
+            editor.ShaderProperty(FindProperty("_EmissionFlicker", props),    new GUIContent("Emission Flicker", "Random flicker strength, like a faulty tube. 0 = steady."));
+            var uvScroll = FindProperty("_UvScroll", props);
+            EditorGUI.BeginChangeCheck();
+            var scroll = EditorGUILayout.Vector2Field(new GUIContent("UV Scroll", "Texture tiles per second all maps slide by (conveyor belts, flowing water, moving lights). 0 = still."), (Vector2) uvScroll.vectorValue);
+            if (EditorGUI.EndChangeCheck()) uvScroll.vectorValue = scroll;
             editor.TextureScaleOffsetProperty(baseMap);
 
             EditorGUILayout.Space(6);
@@ -77,6 +84,24 @@ namespace Jibbers.MapTools
             if (BeginFeature(props, "Wind Sway", "Vertex animation that sways the mesh in the wind. Use the masks to keep bases and trunks planted.", "_UseWindSway", "_WIND_SWAY"))
                 DrawWindSway(editor, props);
             EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            if (BeginFeature(props, "Moving Parts", "Spins, swings or bobs parts that were baked into the mesh with the Moving Parts Baker component. Runs entirely on the GPU.", "_UseMovingParts", "_MOVING_PARTS"))
+                DrawMovingParts(editor, props);
+            EditorGUILayout.EndVertical();
+        }
+
+        static void DrawMovingParts(MaterialEditor editor, MaterialProperty[] props)
+        {
+            var autoSpeed = FindProperty("_MoveAutoSpeed", props);
+            var drive     = FindProperty("_MoveDrive", props);
+
+            EditorGUI.indentLevel++;
+            editor.ShaderProperty(autoSpeed, new GUIContent("Auto Speed", "Drive per second the parts get on their own: meters the rims of spinning wheels roll, and at 1 the swing/bob periods are seconds. 0 = only moved by scripts (lifts drive this from the cable)."));
+            editor.ShaderProperty(drive,     new GUIContent("Drive", "Drive accumulated so far. Scripts write this at runtime; edit it to offset the phase."));
+            EditorGUILayout.HelpBox("Place a Moving Part marker at the center of each wheel, sign or float (or on separate part objects), choose Spin, Swing or Bob on it, then Bake on the Moving Parts Baker of the parent object. Enable Always Refresh in the Scene view to preview. Motion is visual only - collision stays put.", MessageType.None);
+            EditorGUI.indentLevel--;
         }
 
         static void DrawLiquid(MaterialEditor editor, MaterialProperty[] props)
@@ -215,6 +240,7 @@ namespace Jibbers.MapTools
             ApplyKeyword(material, "_OVERLAY_FADE", material.GetFloat("_UseOverlayFade") > 0.5f);
             ApplyKeyword(material, "_LIQUID", material.GetFloat("_UseLiquid") > 0.5f);
             ApplyKeyword(material, "_WIND_SWAY", material.GetFloat("_UseWindSway") > 0.5f);
+            ApplyKeyword(material, "_MOVING_PARTS", material.GetFloat("_UseMovingParts") > 0.5f);
         }
 
         public static void DrawReadWriteWarning(MaterialProperty texProp)

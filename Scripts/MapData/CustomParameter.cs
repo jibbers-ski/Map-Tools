@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-public enum CustomParameterType { Null, Int, Float, Bool, String, Selection }
+public enum CustomParameterType { Null, Int, Float, Bool, String, Selection, Color }
 
 [Serializable]
 public class CustomParameter : ISerializable
@@ -16,6 +16,12 @@ public class CustomParameter : ISerializable
     public bool boolValue;
     public string stringValue;
     public string optionsString;
+
+    public Color ColorValue
+    {
+        get => ColorUtility.TryParseHtmlString(stringValue, out var color) ? color : Color.white;
+        set => stringValue = "#" + ColorUtility.ToHtmlStringRGB(value);
+    }
 
     public void Serialize(ISerializer serializer)
     {
@@ -39,6 +45,7 @@ public class CustomParameter : ISerializable
             break;
             case CustomParameterType.String:
             case CustomParameterType.Selection:
+            case CustomParameterType.Color:
                 stringValue = serializer.SerializeString(name, stringValue ?? "");
             break;
         }
@@ -117,6 +124,16 @@ public class CustomParameterDrawer : UnityEditor.PropertyDrawer
             case CustomParameterType.String:
                 UnityEditor.EditorGUI.PropertyField(valueRect, property.FindPropertyRelative("stringValue"), GUIContent.none);
                 break;
+            case CustomParameterType.Color:
+            {
+                var stringProp = property.FindPropertyRelative("stringValue");
+                var color = ColorUtility.TryParseHtmlString(stringProp.stringValue, out var parsed) ? parsed : Color.white;
+                UnityEditor.EditorGUI.BeginChangeCheck();
+                color = UnityEditor.EditorGUI.ColorField(valueRect, GUIContent.none, color, true, false, false);
+                if (UnityEditor.EditorGUI.EndChangeCheck())
+                    stringProp.stringValue = "#" + ColorUtility.ToHtmlStringRGB(color);
+                break;
+            }
             case CustomParameterType.Selection:
             {
                 var optionsProp = property.FindPropertyRelative("optionsString");

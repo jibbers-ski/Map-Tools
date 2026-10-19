@@ -103,6 +103,7 @@ namespace Jibbers.MapTools
 
                 var terrain = terrainGO.GetComponent<Terrain>();
                 terrain.ImportHeightmapR16(chunk.terrainData);
+                terrain.allowAutoConnect = true;
 
                 terrain.transform.position = chunk.position;
                 terrain.transform.parent = transform;
@@ -114,6 +115,7 @@ namespace Jibbers.MapTools
                 {
                     chunk.snowMaskData.compression = 0;
                     snowMaskTex = chunk.snowMaskData.GetTexture(forceMips: true);
+                    snowMaskTex.wrapMode = TextureWrapMode.Clamp;
                     terrain.materialTemplate.SetTexture("_SnowMask", snowMaskTex);
                     if (terrain.materialTemplate.HasProperty("_UseMasks"))
                         terrain.materialTemplate.SetFloat("_UseMasks", 1f);
@@ -127,6 +129,7 @@ namespace Jibbers.MapTools
                 {
                     chunk.snowMask2Data.compression = 0;
                     snowMask2Tex = chunk.snowMask2Data.GetTexture();
+                    snowMask2Tex.wrapMode = TextureWrapMode.Clamp;
                     terrain.materialTemplate.SetTexture("_SnowMask2", snowMask2Tex);
                 }
 
@@ -161,7 +164,8 @@ namespace Jibbers.MapTools
                             {
                                 if (mapObject.parameters.TryGetValue(existing.name, out var imported))
                                 {
-                                    existing.type        = imported.type;
+                                    if (imported.type != CustomParameterType.String)
+                                        existing.type    = imported.type;
                                     existing.intValue    = imported.intValue;
                                     existing.floatValue  = imported.floatValue;
                                     existing.boolValue   = imported.boolValue;
@@ -173,6 +177,9 @@ namespace Jibbers.MapTools
                             #endif
                         }
                     }
+
+                    if (mapObject.lift != null && newObj.TryGetComponent(out LiftSetup liftSetup))
+                        liftSetup.FromData(mapObject.lift);
                 }
 
                 if (chunk.customObjects != null && chunk.customObjects.Length > 0)
